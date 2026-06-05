@@ -8,6 +8,7 @@ from analyzer import analyze_article
 from crawler import fetch_article
 from db import init_db
 from recommender import recommend_opposite
+from searcher import search_related_articles
 
 
 def render_header() -> None:
@@ -106,6 +107,33 @@ def render_recommendations(recommendations: list[dict]) -> None:
                 st.link_button("🔗 기사 보러 가기", rec.get("url", ""), use_container_width=True)
 
 
+def render_external_candidates(candidates: list[dict]) -> None:
+    """Render externally searched related articles when the local DB has no match."""
+    st.divider()
+    st.markdown("### 🌐 외부 관련 기사 후보")
+    st.caption("현재 DB에 같은 이슈의 비교 기사가 없어, 외부 기사 후보를 가져왔습니다. 아래 기사는 아직 NewSight가 다시 프레임 분석한 결과는 아닙니다.")
+
+    if not candidates:
+        st.warning("외부 관련 기사 후보도 찾지 못했습니다.")
+        return
+
+    query = candidates[0].get("search_query", "")
+    if query:
+        st.caption(f"검색어: `{query}`")
+
+    for candidate in candidates:
+        with st.container(border=True):
+            st.markdown(f"#### **{candidate.get('title', '제목 없음')}**")
+            st.caption(
+                f"**출처:** {candidate.get('source', '출처 정보 없음')} | "
+                f"**날짜:** {candidate.get('date', '날짜 정보 없음')}"
+            )
+            snippet = candidate.get("snippet", "")
+            if snippet:
+                st.write(snippet)
+            st.link_button("🔗 후보 기사 보러 가기", candidate.get("url", ""), use_container_width=True)
+
+
 def main() -> None:
     """Entry point for the Streamlit MVP app."""
     init_db()
@@ -139,6 +167,9 @@ def main() -> None:
 
                 analysis = analyze_article(article)
                 recommendations = recommend_opposite(analysis)
+                external_candidates = []
+                if not recommendations:
+                    external_candidates = search_related_articles(article, analysis, limit=3)
 
             st.success("분석이 완료되었습니다!")
 
@@ -151,7 +182,11 @@ def main() -> None:
             with col_right:
                 render_analysis_panel(analysis)
 
-            render_recommendations(recommendations)
+            if recommendations:
+                render_recommendations(recommendations)
+            else:
+                st.info("현재 DB에서 같은 이슈의 다른 프레임 기사를 찾지 못해 외부 기사 후보를 함께 확인할 수 있도록 했습니다.")
+                render_external_candidates(external_candidates)
 
     st.write("")
     st.divider()

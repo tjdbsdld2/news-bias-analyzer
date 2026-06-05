@@ -90,8 +90,8 @@ def _get_connection() -> sqlite3.Connection:
     return connection
 
 
-def init_db() -> None:
-    """Create the articles table and seed sample data when empty."""
+def init_db(seed_samples: bool = True) -> None:
+    """Create the articles table and optionally seed sample data when empty."""
     with _get_connection() as connection:
         connection.execute(
             """
@@ -110,7 +110,8 @@ def init_db() -> None:
             """
         )
 
-    insert_sample_articles_if_empty()
+    if seed_samples:
+        insert_sample_articles_if_empty()
 
 
 def insert_sample_articles_if_empty() -> None:
@@ -141,6 +142,46 @@ def insert_sample_articles_if_empty() -> None:
                 )
                 for article in SAMPLE_ARTICLES
             ],
+        )
+
+
+def save_article_with_analysis(article: dict, analysis: dict) -> None:
+    """
+    Insert or update a crawled article together with its analysis metadata.
+
+    The article URL is treated as the unique identifier so repeated imports can
+    safely refresh existing rows.
+    """
+    init_db(seed_samples=False)
+
+    with _get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO articles (
+                url, title, body, source, date, issue_tags, frame, tone, primary_voice
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+                title = excluded.title,
+                body = excluded.body,
+                source = excluded.source,
+                date = excluded.date,
+                issue_tags = excluded.issue_tags,
+                frame = excluded.frame,
+                tone = excluded.tone,
+                primary_voice = excluded.primary_voice
+            """,
+            (
+                article.get("url", ""),
+                article.get("title", "제목 없음"),
+                article.get("body", ""),
+                article.get("source", ""),
+                article.get("date", ""),
+                json.dumps(analysis.get("issue_tags", []), ensure_ascii=False),
+                analysis.get("frame", ""),
+                analysis.get("tone", ""),
+                analysis.get("primary_voice", ""),
+            ),
         )
 
 

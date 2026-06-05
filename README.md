@@ -9,6 +9,7 @@
 - `OpenAI` 또는 `Anthropic` API로 기사 관점 분석
 - API 키가 없을 때도 `mock 분석 결과`로 앱 실행 가능
 - `SQLite` 샘플 기사 DB에서 다른 관점 기사 추천
+- DB에 추천 기사가 없을 때 외부 관련 기사 후보 검색
 
 ## 파일 구조
 
@@ -18,9 +19,11 @@ news-bias-analyzer/
 ├── analyzer.py
 ├── crawler.py
 ├── db.py
+├── ingest_articles.py
 ├── prompt.py
 ├── prompts.py
 ├── recommender.py
+├── searcher.py
 ├── requirements.txt
 └── data/
     └── articles.db   # 첫 실행 시 자동 생성
@@ -65,23 +68,39 @@ streamlit run app.py
 2. `crawler.py`의 `fetch_article(url)`이 기사 본문을 추출합니다.
 3. `analyzer.py`의 `analyze_article(article)`이 분석 결과 JSON을 반환합니다.
 4. `recommender.py`의 `recommend_opposite(analysis)`가 추천 기사를 찾습니다.
-5. `db.py`가 SQLite DB를 초기화하고 샘플 기사를 자동으로 넣습니다.
+5. 추천 결과가 없으면 `searcher.py`가 외부 관련 기사 후보를 찾습니다.
+6. `db.py`가 SQLite DB를 초기화하고 샘플 기사를 자동으로 넣습니다.
 
-## 5. 주의사항
+## 5. 기사 URL 일괄 수집
+
+`data/article_urls.csv`에 기사 URL을 적어두고 아래 명령으로 SQLite DB에 저장할 수 있습니다.
+
+```bash
+python ingest_articles.py
+```
+
+처음 몇 개만 시험하고 싶다면:
+
+```bash
+python ingest_articles.py --limit 3
+```
+
+## 6. 주의사항
 
 - 일부 뉴스 사이트는 크롤링 방지 정책 때문에 본문 추출이 실패할 수 있습니다.
+- 외부 기사 후보 검색은 네트워크 상태와 RSS 제공 여부에 따라 결과가 없을 수 있습니다.
 - 현재 추천 기능은 `샘플 SQLite DB`를 기반으로 동작합니다.
 - 실제 서비스 수준의 추천 품질을 위해서는 더 많은 기사 데이터와 정교한 태그 설계가 필요합니다.
 - 이 프로젝트의 분석 결과는 절대적 판정이 아니라 비판적 읽기를 돕는 참고 자료입니다.
 
-## 6. 아직 구현되지 않은 부분
+## 7. 아직 구현되지 않은 부분
 
 - 대규모 기사 수집 자동화
 - 실제 뉴스 데이터셋 기반 추천 고도화
 - 사용자 피드백 저장
 - 배포 및 로그인 기능
 
-## 7. 빠른 체크
+## 8. 빠른 체크
 
 API 키가 없더라도 아래 명령으로 바로 시연할 수 있습니다.
 
