@@ -1,4 +1,3 @@
-
 import argparse
 import json
 import math
@@ -40,6 +39,10 @@ class AnalyzerCallBudgetExceeded(RuntimeError):
 
 @dataclass
 class AnalyzerCallBudget:
+    """
+    analyzer.py 호출 횟수를 관리하는 예산 객체.
+    추천 과정에서 LLM 호출 수를 제한하기 위해 사용한다.
+    """
     max_calls: int
     calls: int = 0
 
@@ -48,12 +51,24 @@ class AnalyzerCallBudget:
 
     def consume(self) -> None:
         if self.calls >= self.max_calls:
-            raise AnalyzerCallBudgetExceeded(f"analyzer.py 호출 한도 {self.max_calls}회에 도달했습니다.")
+            raise AnalyzerCallBudgetExceeded(
+                f"analyzer.py 호출 한도 {self.max_calls}회에 도달했습니다."
+            )
         self.calls += 1
 
 
 @dataclass(order=True)
 class Branch:
+    """
+    B&B(Branch and Bound, 분기한정법)에서 사용하는 탐색 단위.
+
+    - branch: issue / frame 기준으로 묶인 후보군(부분 문제)
+    - upper_bound: 이 branch 내부 후보들이 가질 수 있는 최고 잠재 점수의 상한값
+
+    분기한정법은 각 branch의 upper_bound를 먼저 계산해
+    유망한 branch부터 먼저 탐색하고,
+    상한이 낮은 branch는 뒤로 미루거나 탐색을 조기에 중단하는 방식이다.
+    """
     upper_bound: float
     branch_key: str = field(compare=False)
     candidate_indices: List[int] = field(compare=False, default_factory=list)
@@ -66,11 +81,13 @@ def now_iso() -> str:
 def safe_str(value) -> str:
     if value is None:
         return ""
+
     try:
         if pd.isna(value):
             return ""
     except Exception:
         pass
+
     return str(value)
 
 
@@ -93,11 +110,14 @@ def clean_html(text: str) -> str:
 def parse_json_safely(value):
     if isinstance(value, dict):
         return value
+
     if not isinstance(value, str):
         return None
+
     value = value.strip()
     if not value:
         return None
+
     try:
         return json.loads(value)
     except Exception:
@@ -105,9 +125,14 @@ def parse_json_safely(value):
 
 
 def article_from_row(row: pd.Series) -> dict:
+    """
+    DB row를 analyzer.py가 이해할 수 있는 article dict로 변환한다.
+    """
     content = safe_str(row.get("content"))
+
     if not content:
         content = safe_str(row.get("preprocessed_content"))
+
     return {
         "issue": safe_str(row.get("issue")),
         "issue_tags": safe_str(row.get("issue_tags")),
@@ -121,6 +146,10 @@ def article_from_row(row: pd.Series) -> dict:
 
 
 def normalize_analysis(analysis: Dict) -> Dict:
+    """
+    analyzer.py 출력 또는 DB의 analysis_json을
+    recommender 내부 표준 형식으로 정규화한다.
+    """
     if not isinstance(analysis, dict):
         analysis = {}
 
@@ -149,7 +178,16 @@ def normalize_analysis(analysis: Dict) -> Dict:
 
 
 def load_analysis_from_row(row: pd.Series) -> Optional[Dict]:
-    possible_json_columns = ["analysis_json", "bias_analysis_json", "analyzer_result", "analysis"]
+    """
+    row에 이미 저장된 분석 결과가 있으면 먼저 재사용한다.
+    analysis_json / analyzer_result / bias_* 컬럼 등을 지원한다.
+    """
+    possible_json_columns = [
+        "analysis_json",
+        "bias_analysis_json",
+        "analyzer_result",
+        "analysis",
+    ]
 
     for col in possible_json_columns:
         if col in row.index:
@@ -174,7 +212,14 @@ def load_analysis_from_row(row: pd.Series) -> Optional[Dict]:
             }
         )
 
-    prefixed_columns = ["bias_bias_axis", "bias_bias_strength", "bias_emotionality", "bias_source_balance", "bias_evidence_quality"]
+    prefixed_columns = [
+        "bias_bias_axis",
+        "bias_bias_strength",
+        "bias_emotionality",
+        "bias_source_balance",
+        "bias_evidence_quality",
+    ]
+
     if any(col in row.index for col in prefixed_columns):
         return normalize_analysis(
             {
@@ -202,15 +247,28 @@ def analysis_cache_key(row: pd.Series) -> str:
 
 
 def analyze_with_analyzer(article: dict, budget: AnalyzerCallBudget) -> Dict:
+    """
+    analyzer.py를 실제로 호출하는 래퍼.
+    호출 전 예산을 차감한다.
+    """
     if analyzer_analyze_article is None:
-        raise RuntimeError("analyzer.py에서 analyze_article 또는 analyze_row 함수를 import하지 못했습니다.")
+        raise RuntimeError(
+            "analyzer.py에서 analyze_article 또는 analyze_row 함수를 import하지 못했습니다."
+        )
 
     budget.consume()
     analysis = analyzer_analyze_article(article)
     return normalize_analysis(analysis)
 
 
-def get_or_create_analysis(row: pd.Series, budget: AnalyzerCallBudget, cache: Dict[str, Dict]) -> Dict:
+def get_or_create_analysis(
+    row: pd.Series,
+    budget: AnalyzerCallBudget,
+    cache: Dict[str, Dict],
+) -> Dict:
+    """
+    캐시 → row 내 저장된 분석값 → analyzer 호출 순서로 분석을 확보한다.
+    """
     key = analysis_cache_key(row)
     if key in cache:
         return cache[key]
@@ -227,6 +285,14 @@ def get_or_create_analysis(row: pd.Series, budget: AnalyzerCallBudget, cache: Di
 
 
 def enrich_row_with_analysis_hints(row: pd.Series, analysis: Dict) -> pd.Series:
+    """
+    analyzer가 뽑은 topic / main_frame / stance를 row metadata에 반영한다.
+
+    입력 URL 기사는 처음엔 issue=input_url, frame=input_article처럼 들어오는데,
+    이 상태 그대로면 relevance 계산이 약해진다.
+    그래서 analyzer 결과를 row 메타데이터에 덮어써서
+    입력 URL도 실제 주제와 프레임 기준으로 비교되게 만든다.
+    """
     row = row.copy()
     topic = safe_str(analysis.get("topic"))
     main_frame = safe_str(analysis.get("main_frame"))
@@ -256,6 +322,11 @@ def enrich_row_with_analysis_hints(row: pd.Series, analysis: Dict) -> pd.Series:
 
 
 def crawl_url_to_row(news_url: str) -> pd.Series:
+    """
+    사용자가 입력한 URL을 크롤링해서 target row로 만든다.
+    초기 issue/frame은 placeholder로 넣고,
+    이후 analyzer 결과로 실제 topic/frame으로 보정한다.
+    """
     if crawl_news is None:
         raise RuntimeError("crawler.py에서 crawl_news를 import하지 못했습니다.")
 
@@ -278,11 +349,20 @@ def crawl_url_to_row(news_url: str) -> pd.Series:
     )
 
 
-def append_or_find_target_url(df: pd.DataFrame, news_url: str) -> Tuple[pd.DataFrame, int]:
+def append_or_find_target_url(
+    df: pd.DataFrame,
+    news_url: str,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    입력 URL이 DB 안에 이미 있으면 기존 행을 사용하고,
+    없으면 새 target row를 append한다.
+    """
     news_url = news_url.strip()
 
     if "url" in df.columns:
-        matched = df.index[df["url"].astype(str).str.strip() == news_url].tolist()
+        matched = df.index[
+            df["url"].astype(str).str.strip() == news_url
+        ].tolist()
         if matched:
             return df, matched[0]
 
@@ -292,6 +372,9 @@ def append_or_find_target_url(df: pd.DataFrame, news_url: str) -> Tuple[pd.DataF
 
 
 def crawl_candidate_if_needed(row: pd.Series, delay: float = 1.0) -> pd.Series:
+    """
+    후보 기사에 content가 없으면 crawler.py로 본문을 보충한다.
+    """
     content = safe_str(row.get("content")) or safe_str(row.get("preprocessed_content"))
     if content:
         return row
@@ -350,6 +433,12 @@ def vector_distance(vector_a: Dict, vector_b: Dict) -> float:
 
 
 def bias_distance_score(target_analysis: Dict, candidate_analysis: Dict) -> float:
+    """
+    입력 기사와 후보 기사 사이의 편향 거리.
+    - bias_axis 거리
+    - perspective_vector 거리
+    - 방향이 반대면 opposite bonus
+    """
     target_axis = safe_float(target_analysis.get("bias_axis"), 0.0)
     candidate_axis = safe_float(candidate_analysis.get("bias_axis"), 0.0)
 
@@ -360,10 +449,16 @@ def bias_distance_score(target_analysis: Dict, candidate_analysis: Dict) -> floa
     )
     opposite_bonus = 15.0 if target_axis * candidate_axis < 0 else 0.0
 
-    return min(100.0, 0.60 * axis_distance + 0.40 * vector_dist + opposite_bonus)
+    return min(
+        100.0,
+        0.60 * axis_distance + 0.40 * vector_dist + opposite_bonus,
+    )
 
 
 def relevance_score(target_row: pd.Series, candidate_row: pd.Series) -> float:
+    """
+    issue / issue_tags / metadata lexical overlap 기반 관련도 계산.
+    """
     target_issue = safe_str(target_row.get("issue"))
     candidate_issue = safe_str(candidate_row.get("issue"))
 
@@ -396,7 +491,20 @@ def quality_score(candidate_analysis: Dict) -> float:
     return min(100.0, 0.45 * source_balance + 0.55 * evidence_quality)
 
 
-def recommendation_score(target_row: pd.Series, candidate_row: pd.Series, target_analysis: Dict, candidate_analysis: Dict) -> Dict:
+def recommendation_score(
+    target_row: pd.Series,
+    candidate_row: pd.Series,
+    target_analysis: Dict,
+    candidate_analysis: Dict,
+) -> Dict:
+    """
+    최종 추천 점수 계산.
+    - 관련도(relevance)
+    - 편향 거리(bias distance)
+    - 품질(quality)
+    - 프레임 다양성(frame difference)
+    를 조합한다.
+    """
     rel = relevance_score(target_row, candidate_row)
     dist = bias_distance_score(target_analysis, candidate_analysis)
     qual = quality_score(candidate_analysis)
@@ -420,6 +528,11 @@ def recommendation_score(target_row: pd.Series, candidate_row: pd.Series, target
 
 
 def estimate_upper_bound(target_row: pd.Series, candidate_row: pd.Series) -> float:
+    """
+    B&B에서 사용하는 upper bound(상한값) 추정 함수.
+    실제 추천 점수와 동일하지는 않지만,
+    이 후보/분기가 최대 어느 정도 점수를 낼 수 있을지 보수적으로 추정한다.
+    """
     target_meta = metadata_text(target_row)
     candidate_meta = metadata_text(candidate_row)
 
@@ -439,6 +552,12 @@ def estimate_upper_bound(target_row: pd.Series, candidate_row: pd.Series) -> flo
 
 
 def build_branches(df: pd.DataFrame, candidate_indices: List[int], target_row: pd.Series) -> List[Branch]:
+    # B&B(분기한정법) 설명:
+    # 전체 후보를 한 번에 다 평가하지 않고, issue/frame 기준으로 후보를 "분기(branch)"로 묶는다.
+    # 각 branch에 대해 최고 잠재 점수 upper_bound(상한값)를 먼저 계산한 뒤,
+    # 상한이 높은 branch부터 탐색한다.
+    # 이렇게 하면 유망하지 않은 branch를 늦게 보거나 사실상 생략할 수 있어,
+    # 적은 LLM 호출로도 좋은 추천을 찾기 쉽다.
     grouped = {}
     for idx in candidate_indices:
         row = df.loc[idx]
@@ -526,6 +645,12 @@ def run_bnb_on_candidates(
     target_row = df.loc[target_idx]
     target_row = enrich_row_with_analysis_hints(target_row, target_analysis)
 
+    # B&B(분기한정법) 핵심 흐름:
+    # 1) 후보를 여러 branch로 나눈다.
+    # 2) 각 branch의 최고 가능 점수 upper_bound를 계산한다.
+    # 3) upper_bound가 가장 높은 branch부터 실제 평가한다.
+    # 4) 현재 최고 해(incumbent)가 충분히 좋으면,
+    #    남은 branch들의 upper_bound와 비교해 더 볼 필요 없는 경우 탐색을 중단한다.
     branches = build_branches(df=df, candidate_indices=candidate_indices, target_row=target_row)
     incumbent = None
     incumbent_score = -1.0
@@ -539,10 +664,17 @@ def run_bnb_on_candidates(
 
         if incumbent is not None:
             optimality_gap = max(0.0, (global_upper_bound - incumbent_score) / max(global_upper_bound, 1.0))
+
+            # B&B의 "한정(bound)" 부분:
+            # 남아 있는 branch들의 최고 가능 점수(global_upper_bound)가
+            # 현재 최고 점수(incumbent_score)를 거의 이기지 못한다면,
+            # 더 탐색해도 개선 여지가 작다고 보고 중단한다.
             if optimality_gap <= gap_threshold:
                 stop_reason = "optimality_gap"
                 break
 
+        # B&B의 "분기(branch) 선택" 부분:
+        # upper_bound가 가장 높은, 즉 가장 유망한 branch를 먼저 꺼낸다.
         branch = branches.pop(0)
         branch.candidate_indices = sorted(
             branch.candidate_indices,
@@ -594,19 +726,31 @@ def run_bnb_on_candidates(
         }
         evaluated.append(record)
 
+        # 현재까지 가장 좋은 해(incumbent) 갱신
         if final_score > incumbent_score:
             incumbent_score = final_score
             incumbent = record
 
+        # 같은 branch 안에 아직 평가하지 않은 후보가 남아 있으면,
+        # branch의 upper_bound를 다시 계산해 탐색 큐에 넣는다.
         if branch.candidate_indices:
-            branch.upper_bound = max(estimate_upper_bound(target_row, df.loc[idx]) for idx in branch.candidate_indices)
+            branch.upper_bound = max(
+                estimate_upper_bound(target_row, df.loc[idx])
+                for idx in branch.candidate_indices
+            )
             branches.append(branch)
 
-    remaining_upper_bound = max([branch.upper_bound for branch in branches], default=incumbent_score if incumbent is not None else 0.0)
+    remaining_upper_bound = max(
+        [branch.upper_bound for branch in branches],
+        default=incumbent_score if incumbent is not None else 0.0,
+    )
     if incumbent is None:
         final_gap = None
     else:
-        final_gap = max(0.0, (remaining_upper_bound - incumbent_score) / max(remaining_upper_bound, 1.0))
+        final_gap = max(
+            0.0,
+            (remaining_upper_bound - incumbent_score) / max(remaining_upper_bound, 1.0),
+        )
 
     return {
         "best": incumbent,
@@ -629,6 +773,13 @@ def branch_and_bound_recommend(
     min_score: float = 70.0,
     min_relevance: float = 60.0,
 ) -> Dict:
+    """
+    추천 파이프라인 메인 함수.
+    1) target 분석
+    2) DB 후보에 대해 B&B 탐색
+    3) DB 추천이 부족하면 네이버 검색 후보 확장
+    4) 최종 추천 반환
+    """
     global analysis_cache
     analysis_cache = {}
 
@@ -645,7 +796,10 @@ def branch_and_bound_recommend(
 
     if "url" in df.columns:
         target_url = safe_str(target_row.get("url")).strip()
-        candidate_indices = [idx for idx in candidate_indices if safe_str(df.loc[idx].get("url")).strip() != target_url]
+        candidate_indices = [
+            idx for idx in candidate_indices
+            if safe_str(df.loc[idx].get("url")).strip() != target_url
+        ]
 
     reserve_calls = 2 if use_naver else 0
     db_result = run_bnb_on_candidates(
@@ -671,6 +825,7 @@ def branch_and_bound_recommend(
             start_idx = len(df)
             df = pd.concat([df, pd.DataFrame(search_rows)], ignore_index=True)
 
+            # 중복 URL 제거 + target URL 제거
             target_url = safe_str(target_row.get("url")).strip()
             seen_urls = set()
             search_indices = []
@@ -692,7 +847,9 @@ def branch_and_bound_recommend(
                     reserve_calls=0,
                 )
                 search_best = search_result.get("best")
-                if search_best and (best is None or safe_float(search_best.get("final_score"), 0.0) > safe_float(best.get("final_score"), 0.0)):
+                if search_best and (
+                    best is None or safe_float(search_best.get("final_score"), 0.0) > safe_float(best.get("final_score"), 0.0)
+                ):
                     best = search_best
             else:
                 search_result = {
@@ -762,7 +919,9 @@ def main() -> None:
     elif args.target_idx is not None:
         target_idx = args.target_idx
     else:
-        raise ValueError("추천 기준 기사가 필요합니다. --url 뉴스기사URL 또는 --target-idx 행번호 중 하나를 입력하세요.")
+        raise ValueError(
+            "추천 기준 기사가 필요합니다. --url 뉴스기사URL 또는 --target-idx 행번호 중 하나를 입력하세요."
+        )
 
     result = branch_and_bound_recommend(
         df=df,
@@ -803,6 +962,7 @@ def print_result_summary(result: Dict, output_path: str) -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 # def example_analysis_from_frame(frame: str) -> dict:
