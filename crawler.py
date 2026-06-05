@@ -1,3 +1,4 @@
+
 import argparse
 import re
 import time
@@ -17,14 +18,12 @@ HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-
 NAVER_SELECTORS = [
     "#dic_area",
     "#articeBody",
     "#articleBodyContents",
     "div.newsct_article",
 ]
-
 
 GENERIC_SELECTORS = [
     "article",
@@ -36,7 +35,6 @@ GENERIC_SELECTORS = [
     "[id*=content]",
     "[id*=news]",
 ]
-
 
 REMOVE_SELECTORS = [
     "script",
@@ -53,7 +51,6 @@ REMOVE_SELECTORS = [
     "svg",
     "canvas",
 ]
-
 
 DROP_LINE_PATTERNS = [
     r"^광고$",
@@ -78,11 +75,11 @@ DROP_LINE_PATTERNS = [
 ]
 
 
-def now_iso():
+def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def validate_url(url):
+def validate_url(url: str) -> str:
     if not isinstance(url, str) or not url.strip():
         raise ValueError("뉴스 링크가 비어 있습니다.")
 
@@ -98,13 +95,12 @@ def validate_url(url):
     return url
 
 
-def fetch_html(url, timeout=12):
+def fetch_html(url: str, timeout: int = 12) -> str:
     response = requests.get(
         url,
         headers=HEADERS,
         timeout=timeout,
     )
-
     response.raise_for_status()
 
     if not response.encoding or response.encoding.lower() == "iso-8859-1":
@@ -113,13 +109,7 @@ def fetch_html(url, timeout=12):
     return response.text
 
 
-def remove_noise_nodes(node):
-    for selector in REMOVE_SELECTORS:
-        for tag in node.select(selector):
-            tag.decompose()
-
-
-def normalize_text(text):
+def normalize_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
@@ -134,47 +124,70 @@ def normalize_text(text):
     return text.strip()
 
 
-def get_node_text(node):
+def extract_title(soup: BeautifulSoup) -> str:
+    og_title = soup.select_one("meta[property='og:title']")
+    if og_title and og_title.get("content"):
+        return normalize_text(og_title.get("content"))
+
+    twitter_title = soup.select_one("meta[name='twitter:title']")
+    if twitter_title and twitter_title.get("content"):
+        return normalize_text(twitter_title.get("content"))
+
+    title_tag = soup.find("title")
+    if title_tag:
+        return normalize_text(title_tag.get_text(" ", strip=True))
+
+    return ""
+
+
+def extract_source(url: str, soup: BeautifulSoup) -> str:
+    og_site = soup.select_one("meta[property='og:site_name']")
+    if og_site and og_site.get("content"):
+        return normalize_text(og_site.get("content"))
+
+    domain = urlparse(url).netloc.lower()
+    return domain
+
+
+def remove_noise_nodes(node) -> None:
+    for selector in REMOVE_SELECTORS:
+        for tag in node.select(selector):
+            tag.decompose()
+
+
+def get_node_text(node) -> str:
     remove_noise_nodes(node)
 
     for br in node.find_all("br"):
         br.replace_with("\n")
 
     text = node.get_text("\n", strip=True)
-
     return normalize_text(text)
 
 
-def extract_naver_content(soup):
+def extract_naver_content(soup: BeautifulSoup) -> str:
     for selector in NAVER_SELECTORS:
         node = soup.select_one(selector)
-
         if node:
             text = get_node_text(node)
-
             if len(text) >= 100:
                 return text
-
     return ""
 
 
-def extract_generic_content(soup):
+def extract_generic_content(soup: BeautifulSoup) -> str:
     remove_noise_nodes(soup)
-
     candidates = []
 
     for selector in GENERIC_SELECTORS:
         for node in soup.select(selector):
             text = get_node_text(node)
-
             if len(text) >= 200:
                 candidates.append(text)
 
     paragraphs = []
-
     for p in soup.find_all("p"):
         text = normalize_text(p.get_text(" ", strip=True))
-
         if len(text) >= 30:
             paragraphs.append(text)
 
@@ -184,39 +197,31 @@ def extract_generic_content(soup):
     if not candidates and soup.body:
         candidates.append(get_node_text(soup.body))
 
-    candidates = sorted(
-        set(candidates),
-        key=len,
-        reverse=True,
-    )
-
+    candidates = sorted(set(candidates), key=len, reverse=True)
     return candidates[0] if candidates else ""
 
 
-def extract_content(url, html):
+def extract_content(url: str, html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     domain = urlparse(url).netloc.lower()
 
     if "news.naver.com" in domain or "n.news.naver.com" in domain:
         content = extract_naver_content(soup)
-
         if content:
             return content
 
     return extract_generic_content(soup)
 
 
-def drop_noise_lines(text):
+def drop_noise_lines(text: str) -> str:
     lines = []
 
     for line in text.splitlines():
         line = normalize_text(line)
-
         if not line:
             continue
 
         should_drop = False
-
         for pattern in DROP_LINE_PATTERNS:
             if re.search(pattern, line, flags=re.IGNORECASE):
                 should_drop = True
@@ -230,49 +235,37 @@ def drop_noise_lines(text):
     return "\n".join(lines)
 
 
-def remove_inline_noise(text):
+def remove_inline_noise(text: str) -> str:
     text = re.sub(
         r"[가-힣]{2,4}\s*(기자|특파원|인턴기자)\s*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+",
         " ",
         text,
     )
-
-    text = re.sub(
-        r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+",
-        " ",
-        text,
-    )
-
+    text = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+", " ", text)
     text = re.sub(
         r"\[[^\]]{0,40}(기자|특파원|인턴기자)[^\]]{0,40}\]",
         " ",
         text,
     )
-
     return text
 
 
-def dedupe_lines(text):
+def dedupe_lines(text: str) -> str:
     result = []
     seen = set()
 
     for line in text.splitlines():
         line = normalize_text(line)
         key = re.sub(r"\s+", "", line)
-
-        if not key:
+        if not key or key in seen:
             continue
-
-        if key in seen:
-            continue
-
         seen.add(key)
         result.append(line)
 
     return "\n".join(result)
 
 
-def preprocess_content(text, max_chars=12000):
+def preprocess_content(text: str, max_chars: int = 12000) -> str:
     text = normalize_text(text)
     text = remove_inline_noise(text)
     text = drop_noise_lines(text)
@@ -288,30 +281,26 @@ def preprocess_content(text, max_chars=12000):
     return text
 
 
-def crawl_news(news_url, delay=1.0, timeout=12, max_chars=12000):
+def crawl_news(news_url: str, delay: float = 1.0, timeout: int = 12, max_chars: int = 12000) -> dict:
     news_url = validate_url(news_url)
 
     try:
-        html = fetch_html(
-            url=news_url,
-            timeout=timeout,
-        )
+        html = fetch_html(url=news_url, timeout=timeout)
+        soup = BeautifulSoup(html, "html.parser")
 
-        raw_content = extract_content(
-            url=news_url,
-            html=html,
-        )
+        title = extract_title(soup)
+        source = extract_source(news_url, soup)
 
-        content = preprocess_content(
-            text=raw_content,
-            max_chars=max_chars,
-        )
+        raw_content = extract_content(url=news_url, html=html)
+        content = preprocess_content(text=raw_content, max_chars=max_chars)
 
         time.sleep(delay)
 
         if not content:
             return {
                 "url": news_url,
+                "title": title,
+                "source": source,
                 "raw_content": raw_content,
                 "content": "",
                 "crawl_status": "no_content",
@@ -320,6 +309,8 @@ def crawl_news(news_url, delay=1.0, timeout=12, max_chars=12000):
 
         return {
             "url": news_url,
+            "title": title,
+            "source": source,
             "raw_content": raw_content,
             "content": content,
             "crawl_status": "success",
@@ -328,9 +319,10 @@ def crawl_news(news_url, delay=1.0, timeout=12, max_chars=12000):
 
     except requests.exceptions.Timeout:
         time.sleep(delay)
-
         return {
             "url": news_url,
+            "title": "",
+            "source": "",
             "raw_content": "",
             "content": "",
             "crawl_status": "timeout",
@@ -339,15 +331,11 @@ def crawl_news(news_url, delay=1.0, timeout=12, max_chars=12000):
 
     except requests.exceptions.HTTPError as error:
         time.sleep(delay)
-
-        status_code = (
-            error.response.status_code
-            if error.response is not None
-            else "unknown"
-        )
-
+        status_code = error.response.status_code if error.response is not None else "unknown"
         return {
             "url": news_url,
+            "title": "",
+            "source": "",
             "raw_content": "",
             "content": "",
             "crawl_status": f"http_error_{status_code}",
@@ -356,9 +344,10 @@ def crawl_news(news_url, delay=1.0, timeout=12, max_chars=12000):
 
     except requests.exceptions.RequestException:
         time.sleep(delay)
-
         return {
             "url": news_url,
+            "title": "",
+            "source": "",
             "raw_content": "",
             "content": "",
             "crawl_status": "request_error",
@@ -367,9 +356,10 @@ def crawl_news(news_url, delay=1.0, timeout=12, max_chars=12000):
 
     except Exception:
         time.sleep(delay)
-
         return {
             "url": news_url,
+            "title": "",
+            "source": "",
             "raw_content": "",
             "content": "",
             "crawl_status": "parse_error",
@@ -377,12 +367,14 @@ def crawl_news(news_url, delay=1.0, timeout=12, max_chars=12000):
         }
 
 
-def save_to_txt(result, output_path="crarling_data.txt"):
+def save_to_txt(result: dict, output_path: str = "crawling_data.txt") -> None:
     with open(output_path, "w", encoding="utf-8") as file:
         file.write("=" * 80 + "\n")
         file.write("CRAWLING RESULT\n")
         file.write("=" * 80 + "\n")
         file.write(f"url: {result.get('url', '')}\n")
+        file.write(f"title: {result.get('title', '')}\n")
+        file.write(f"source: {result.get('source', '')}\n")
         file.write(f"crawl_status: {result.get('crawl_status', '')}\n")
         file.write(f"crawled_at: {result.get('crawled_at', '')}\n")
         file.write("-" * 80 + "\n")
@@ -390,89 +382,30 @@ def save_to_txt(result, output_path="crarling_data.txt"):
         file.write("\n")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "news_url",
-        help="크롤링할 뉴스 기사 링크",
-    )
-
-    parser.add_argument(
-        "--output",
-        default="crarling_data.txt",
-    )
-
-    parser.add_argument(
-        "--delay",
-        type=float,
-        default=1.0,
-    )
-
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=12,
-    )
-
-    parser.add_argument(
-        "--max-chars",
-        type=int,
-        default=12000,
-    )
-
+    parser.add_argument("news_url", help="크롤링할 뉴스 기사 링크")
+    parser.add_argument("--output", default="crawling_data.txt")
+    parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument("--timeout", type=int, default=12)
+    parser.add_argument("--max-chars", type=int, default=12000)
     args = parser.parse_args()
 
-    news_url = args.news_url
-
     result = crawl_news(
-        news_url=news_url,
+        news_url=args.news_url,
         delay=args.delay,
         timeout=args.timeout,
         max_chars=args.max_chars,
     )
 
-    save_to_txt(
-        result=result,
-        output_path=args.output,
-    )
+    save_to_txt(result=result, output_path=args.output)
 
     print(f"crawl_status: {result['crawl_status']}")
+    print(f"title: {result.get('title', '')}")
+    print(f"source: {result.get('source', '')}")
+    print(f"content_length: {len(result.get('content', ''))}")
     print(f"saved: {args.output}")
 
 
 if __name__ == "__main__":
-   main()
-
-# def test_crawler_inside_file():
-#     news_url = "https://n.news.naver.com/mnews/article/001/0016110438?sid=100"
-
-#     result = crawl_news(
-#         news_url=news_url,
-#         delay=1.0,
-#         timeout=12,
-#         max_chars=12000,
-#     )
-
-#     save_to_txt(
-#         result=result,
-#         output_path="crarling_data.txt",
-#     )
-
-#     print("크롤링 테스트 완료")
-#     print(f"URL: {result.get('url')}")
-#     print(f"상태: {result.get('crawl_status')}")
-#     print(f"본문 길이: {len(result.get('content', ''))}")
-#     print("저장 파일: crarling_data.txt")
-
-#     preview = result.get("content", "")
-
-#     print()
-#     print("=" * 80)
-#     print("본문 미리보기")
-#     print("=" * 80)
-#     print(preview)
-
-
-# if __name__ == "__main__":
-#     test_crawler_inside_file()
+    main()

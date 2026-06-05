@@ -1,3 +1,4 @@
+
 import argparse
 import json
 import math
@@ -30,7 +31,6 @@ except Exception:
 MAX_LLM_CALLS = 5
 GAP_THRESHOLD = 0.10
 DEFAULT_TOP_K_SEARCH = 10
-
 NAVER_NEWS_API_URL = "https://openapi.naver.com/v1/search/news.json"
 
 
@@ -48,9 +48,7 @@ class AnalyzerCallBudget:
 
     def consume(self) -> None:
         if self.calls >= self.max_calls:
-            raise AnalyzerCallBudgetExceeded(
-                f"analyzer.py 호출 한도 {self.max_calls}회에 도달했습니다."
-            )
+            raise AnalyzerCallBudgetExceeded(f"analyzer.py 호출 한도 {self.max_calls}회에 도달했습니다.")
         self.calls += 1
 
 
@@ -68,13 +66,11 @@ def now_iso() -> str:
 def safe_str(value) -> str:
     if value is None:
         return ""
-
     try:
         if pd.isna(value):
             return ""
     except Exception:
         pass
-
     return str(value)
 
 
@@ -82,9 +78,7 @@ def safe_float(value, default: float = 0.0) -> float:
     try:
         if pd.isna(value):
             return default
-
         return float(value)
-
     except Exception:
         return default
 
@@ -99,15 +93,11 @@ def clean_html(text: str) -> str:
 def parse_json_safely(value):
     if isinstance(value, dict):
         return value
-
     if not isinstance(value, str):
         return None
-
     value = value.strip()
-
     if not value:
         return None
-
     try:
         return json.loads(value)
     except Exception:
@@ -116,10 +106,8 @@ def parse_json_safely(value):
 
 def article_from_row(row: pd.Series) -> dict:
     content = safe_str(row.get("content"))
-
     if not content:
         content = safe_str(row.get("preprocessed_content"))
-
     return {
         "issue": safe_str(row.get("issue")),
         "issue_tags": safe_str(row.get("issue_tags")),
@@ -137,7 +125,6 @@ def normalize_analysis(analysis: Dict) -> Dict:
         analysis = {}
 
     vector = analysis.get("perspective_vector", {})
-
     if isinstance(vector, str):
         parsed = parse_json_safely(vector)
         vector = parsed if isinstance(parsed, dict) else {}
@@ -156,16 +143,13 @@ def normalize_analysis(analysis: Dict) -> Dict:
         "loaded_terms": analysis.get("loaded_terms", []),
         "missing_perspectives": analysis.get("missing_perspectives", []),
         "reasoning": safe_str(analysis.get("reasoning")),
+        "content_bias": analysis.get("content_bias", {}),
+        "background_bias": analysis.get("background_bias", {}),
     }
 
 
 def load_analysis_from_row(row: pd.Series) -> Optional[Dict]:
-    possible_json_columns = [
-        "analysis_json",
-        "bias_analysis_json",
-        "analyzer_result",
-        "analysis",
-    ]
+    possible_json_columns = ["analysis_json", "bias_analysis_json", "analyzer_result", "analysis"]
 
     for col in possible_json_columns:
         if col in row.index:
@@ -190,14 +174,7 @@ def load_analysis_from_row(row: pd.Series) -> Optional[Dict]:
             }
         )
 
-    prefixed_columns = [
-        "bias_bias_axis",
-        "bias_bias_strength",
-        "bias_emotionality",
-        "bias_source_balance",
-        "bias_evidence_quality",
-    ]
-
+    prefixed_columns = ["bias_bias_axis", "bias_bias_strength", "bias_emotionality", "bias_source_balance", "bias_evidence_quality"]
     if any(col in row.index for col in prefixed_columns):
         return normalize_analysis(
             {
@@ -221,72 +198,70 @@ def load_analysis_from_row(row: pd.Series) -> Optional[Dict]:
 def analysis_cache_key(row: pd.Series) -> str:
     url = safe_str(row.get("url"))
     title = safe_str(row.get("title"))
-
-    if url:
-        return f"url::{url}"
-
-    return f"title::{title}"
+    return f"url::{url}" if url else f"title::{title}"
 
 
-def analyze_with_analyzer(
-    article: dict,
-    budget: AnalyzerCallBudget,
-) -> Dict:
+def analyze_with_analyzer(article: dict, budget: AnalyzerCallBudget) -> Dict:
     if analyzer_analyze_article is None:
-        raise RuntimeError(
-            "analyzer.py에서 analyze_article 또는 analyze_row 함수를 import하지 못했습니다."
-        )
+        raise RuntimeError("analyzer.py에서 analyze_article 또는 analyze_row 함수를 import하지 못했습니다.")
 
     budget.consume()
-
     analysis = analyzer_analyze_article(article)
-
     return normalize_analysis(analysis)
 
 
-def get_or_create_analysis(
-    row: pd.Series,
-    budget: AnalyzerCallBudget,
-    cache: Dict[str, Dict],
-) -> Dict:
+def get_or_create_analysis(row: pd.Series, budget: AnalyzerCallBudget, cache: Dict[str, Dict]) -> Dict:
     key = analysis_cache_key(row)
-
     if key in cache:
         return cache[key]
 
     cached = load_analysis_from_row(row)
-
     if cached is not None:
         cache[key] = cached
         return cached
 
     article = article_from_row(row)
-
-    analysis = analyze_with_analyzer(
-        article,
-        budget,
-    )
-
+    analysis = analyze_with_analyzer(article, budget)
     cache[key] = analysis
-
     return analysis
+
+
+def enrich_row_with_analysis_hints(row: pd.Series, analysis: Dict) -> pd.Series:
+    row = row.copy()
+    topic = safe_str(analysis.get("topic"))
+    main_frame = safe_str(analysis.get("main_frame"))
+    stance = safe_str(analysis.get("stance"))
+
+    current_issue = safe_str(row.get("issue"))
+    current_frame = safe_str(row.get("frame"))
+    current_tags = safe_str(row.get("issue_tags"))
+
+    if topic and current_issue in ["", "input_url", "naver_search"]:
+        row["issue"] = topic
+
+    if main_frame and current_frame in ["", "input_article", "search_candidate"]:
+        row["frame"] = main_frame
+
+    if topic:
+        inferred_tags = [topic]
+        if main_frame:
+            inferred_tags.append(main_frame)
+        if stance:
+            inferred_tags.append(stance)
+        inferred = ";".join([part for part in inferred_tags if part])
+        if current_tags in ["", "input_url", "naver_search"]:
+            row["issue_tags"] = inferred
+
+    return row
 
 
 def crawl_url_to_row(news_url: str) -> pd.Series:
     if crawl_news is None:
-        raise RuntimeError(
-            "crawler.py에서 crawl_news를 import하지 못했습니다."
-        )
+        raise RuntimeError("crawler.py에서 crawl_news를 import하지 못했습니다.")
 
-    result = crawl_news(
-        news_url=news_url,
-        delay=1.0,
-    )
-
+    result = crawl_news(news_url=news_url, delay=1.0)
     if result.get("crawl_status") != "success":
-        raise RuntimeError(
-            f"입력 URL 크롤링 실패: {result.get('crawl_status')}"
-        )
+        raise RuntimeError(f"입력 URL 크롤링 실패: {result.get('crawl_status')}")
 
     return pd.Series(
         {
@@ -294,7 +269,7 @@ def crawl_url_to_row(news_url: str) -> pd.Series:
             "issue_tags": "input_url",
             "url": result.get("url", news_url),
             "title": result.get("title", news_url),
-            "source": "input_url",
+            "source": result.get("source", "input_url"),
             "frame": "input_article",
             "memo": "사용자가 입력한 URL 기사",
             "content": result.get("content", ""),
@@ -303,144 +278,92 @@ def crawl_url_to_row(news_url: str) -> pd.Series:
     )
 
 
-def append_or_find_target_url(
-    df: pd.DataFrame,
-    news_url: str,
-) -> Tuple[pd.DataFrame, int]:
+def append_or_find_target_url(df: pd.DataFrame, news_url: str) -> Tuple[pd.DataFrame, int]:
     news_url = news_url.strip()
 
     if "url" in df.columns:
-        matched = df.index[
-            df["url"].astype(str).str.strip() == news_url
-        ].tolist()
-
+        matched = df.index[df["url"].astype(str).str.strip() == news_url].tolist()
         if matched:
             return df, matched[0]
 
     target_row = crawl_url_to_row(news_url)
-
-    df = pd.concat(
-        [
-            df,
-            pd.DataFrame([target_row]),
-        ],
-        ignore_index=True,
-    )
-
+    df = pd.concat([df, pd.DataFrame([target_row])], ignore_index=True)
     return df, len(df) - 1
 
 
-def crawl_candidate_if_needed(
-    row: pd.Series,
-    delay: float = 1.0,
-) -> pd.Series:
+def crawl_candidate_if_needed(row: pd.Series, delay: float = 1.0) -> pd.Series:
     content = safe_str(row.get("content")) or safe_str(row.get("preprocessed_content"))
-
     if content:
         return row
-
     if crawl_news is None:
         return row
 
     url = safe_str(row.get("url"))
-
     if not url:
         return row
 
-    result = crawl_news(
-        news_url=url,
-        delay=delay,
-    )
-
+    result = crawl_news(news_url=url, delay=delay)
     if result.get("crawl_status") == "success":
         row = row.copy()
         row["content"] = result.get("content", "")
+        row["title"] = safe_str(row.get("title")) or result.get("title", "")
+        row["source"] = safe_str(row.get("source")) or result.get("source", "")
         row["crawl_status"] = result.get("crawl_status", "")
 
     return row
 
 
 def lexical_tokens(text: str) -> set:
-    return set(
-        re.findall(
-            r"[가-힣A-Za-z0-9]{2,}",
-            safe_str(text).lower(),
-        )
-    )
+    return set(re.findall(r"[가-힣A-Za-z0-9]{2,}", safe_str(text).lower()))
 
 
 def lexical_similarity(a: str, b: str) -> float:
     tokens_a = lexical_tokens(a)
     tokens_b = lexical_tokens(b)
-
     if not tokens_a or not tokens_b:
         return 0.0
-
     return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
 
 
 def metadata_text(row: pd.Series) -> str:
-    return " ".join(
-        [
-            safe_str(row.get("issue")),
-            safe_str(row.get("issue_tags")),
-            safe_str(row.get("title")),
-            safe_str(row.get("frame")),
-            safe_str(row.get("memo")),
-        ]
-    )
+    return " ".join([
+        safe_str(row.get("issue")),
+        safe_str(row.get("issue_tags")),
+        safe_str(row.get("title")),
+        safe_str(row.get("frame")),
+        safe_str(row.get("memo")),
+    ])
 
 
 def vector_distance(vector_a: Dict, vector_b: Dict) -> float:
-    keys = sorted(
-        set((vector_a or {}).keys())
-        | set((vector_b or {}).keys())
-    )
-
+    keys = sorted(set((vector_a or {}).keys()) | set((vector_b or {}).keys()))
     if not keys:
         return 0.0
 
     total = 0.0
-
     for key in keys:
         a = safe_float((vector_a or {}).get(key), 0.0)
         b = safe_float((vector_b or {}).get(key), 0.0)
         total += (a - b) ** 2
 
-    return min(
-        100.0,
-        math.sqrt(total / len(keys)),
-    )
+    return min(100.0, math.sqrt(total / len(keys)))
 
 
-def bias_distance_score(
-    target_analysis: Dict,
-    candidate_analysis: Dict,
-) -> float:
+def bias_distance_score(target_analysis: Dict, candidate_analysis: Dict) -> float:
     target_axis = safe_float(target_analysis.get("bias_axis"), 0.0)
     candidate_axis = safe_float(candidate_analysis.get("bias_axis"), 0.0)
 
     axis_distance = abs(target_axis - candidate_axis) / 2.0
-
     vector_dist = vector_distance(
         target_analysis.get("perspective_vector", {}),
         candidate_analysis.get("perspective_vector", {}),
     )
-
     opposite_bonus = 15.0 if target_axis * candidate_axis < 0 else 0.0
 
-    return min(
-        100.0,
-        0.60 * axis_distance
-        + 0.40 * vector_dist
-        + opposite_bonus,
-    )
+    return min(100.0, 0.60 * axis_distance + 0.40 * vector_dist + opposite_bonus)
 
 
-def relevance_score(
-    target_row: pd.Series,
-    candidate_row: pd.Series,
-) -> float:
+def relevance_score(target_row: pd.Series, candidate_row: pd.Series) -> float:
     target_issue = safe_str(target_row.get("issue"))
     candidate_issue = safe_str(candidate_row.get("issue"))
 
@@ -449,30 +372,17 @@ def relevance_score(
 
     target_meta = metadata_text(target_row)
     candidate_meta = metadata_text(candidate_row)
-
     lexical = lexical_similarity(target_meta, candidate_meta)
 
     if target_issue and candidate_issue and target_issue == candidate_issue:
         return min(100.0, 85.0 + lexical * 15.0)
 
-    target_tag_set = set(
-        tag.strip()
-        for tag in target_tags.split(";")
-        if tag.strip()
-    )
-
-    candidate_tag_set = set(
-        tag.strip()
-        for tag in candidate_tags.split(";")
-        if tag.strip()
-    )
+    target_tag_set = set(tag.strip() for tag in target_tags.split(";") if tag.strip())
+    candidate_tag_set = set(tag.strip() for tag in candidate_tags.split(";") if tag.strip())
 
     tag_overlap = 0.0
-
     if target_tag_set and candidate_tag_set:
-        tag_overlap = len(target_tag_set & candidate_tag_set) / len(
-            target_tag_set | candidate_tag_set
-        )
+        tag_overlap = len(target_tag_set & candidate_tag_set) / len(target_tag_set | candidate_tag_set)
 
     if tag_overlap > 0:
         return min(100.0, 65.0 + tag_overlap * 25.0 + lexical * 10.0)
@@ -483,55 +393,21 @@ def relevance_score(
 def quality_score(candidate_analysis: Dict) -> float:
     source_balance = safe_float(candidate_analysis.get("source_balance"), 50.0)
     evidence_quality = safe_float(candidate_analysis.get("evidence_quality"), 50.0)
-
-    return min(
-        100.0,
-        0.45 * source_balance
-        + 0.55 * evidence_quality,
-    )
+    return min(100.0, 0.45 * source_balance + 0.55 * evidence_quality)
 
 
-def recommendation_score(
-    target_row: pd.Series,
-    candidate_row: pd.Series,
-    target_analysis: Dict,
-    candidate_analysis: Dict,
-) -> Dict:
-    rel = relevance_score(
-        target_row,
-        candidate_row,
-    )
-
-    dist = bias_distance_score(
-        target_analysis,
-        candidate_analysis,
-    )
-
+def recommendation_score(target_row: pd.Series, candidate_row: pd.Series, target_analysis: Dict, candidate_analysis: Dict) -> Dict:
+    rel = relevance_score(target_row, candidate_row)
+    dist = bias_distance_score(target_analysis, candidate_analysis)
     qual = quality_score(candidate_analysis)
 
     target_frame = safe_str(target_row.get("frame"))
     candidate_frame = safe_str(candidate_row.get("frame"))
-
-    frame_diff_bonus = (
-        10.0
-        if target_frame and candidate_frame and target_frame != candidate_frame
-        else 0.0
-    )
-
+    frame_diff_bonus = 10.0 if target_frame and candidate_frame and target_frame != candidate_frame else 0.0
     relevance_penalty = -15.0 if rel < 60 else 0.0
 
-    score = (
-        0.50 * rel
-        + 0.30 * dist
-        + 0.15 * qual
-        + 0.05 * frame_diff_bonus
-        + relevance_penalty
-    )
-
-    score = min(
-        100.0,
-        max(0.0, score),
-    )
+    score = 0.50 * rel + 0.30 * dist + 0.15 * qual + 0.05 * frame_diff_bonus + relevance_penalty
+    score = min(100.0, max(0.0, score))
 
     return {
         "relevance_score": round(rel, 4),
@@ -543,139 +419,56 @@ def recommendation_score(
     }
 
 
-def estimate_upper_bound(
-    target_row: pd.Series,
-    candidate_row: pd.Series,
-) -> float:
+def estimate_upper_bound(target_row: pd.Series, candidate_row: pd.Series) -> float:
     target_meta = metadata_text(target_row)
     candidate_meta = metadata_text(candidate_row)
 
-    similarity = lexical_similarity(
-        target_meta,
-        candidate_meta,
-    )
-
-    same_issue = (
-        safe_str(target_row.get("issue"))
-        and safe_str(target_row.get("issue")) == safe_str(candidate_row.get("issue"))
-    )
-
-    different_frame = (
-        safe_str(target_row.get("frame"))
-        != safe_str(candidate_row.get("frame"))
-    )
-
-    different_source = (
-        safe_str(target_row.get("source"))
-        != safe_str(candidate_row.get("source"))
-    )
-
-    has_content = bool(
-        safe_str(candidate_row.get("content"))
-        or safe_str(candidate_row.get("preprocessed_content"))
-    )
+    similarity = lexical_similarity(target_meta, candidate_meta)
+    same_issue = safe_str(target_row.get("issue")) and safe_str(target_row.get("issue")) == safe_str(candidate_row.get("issue"))
+    different_frame = safe_str(target_row.get("frame")) != safe_str(candidate_row.get("frame"))
+    different_source = safe_str(target_row.get("source")) != safe_str(candidate_row.get("source"))
+    has_content = bool(safe_str(candidate_row.get("content")) or safe_str(candidate_row.get("preprocessed_content")))
 
     relevance_est = 100.0 if same_issue else min(80.0, 45.0 + similarity * 120.0)
     diversity_est = 85.0 if different_frame else 50.0
     source_est = 70.0 if different_source else 50.0
     content_est = 75.0 if has_content else 55.0
 
-    upper_bound = (
-        0.35 * relevance_est
-        + 0.35 * diversity_est
-        + 0.15 * source_est
-        + 0.15 * content_est
-    )
-
-    return min(
-        100.0,
-        max(0.0, upper_bound),
-    )
+    upper_bound = 0.35 * relevance_est + 0.35 * diversity_est + 0.15 * source_est + 0.15 * content_est
+    return min(100.0, max(0.0, upper_bound))
 
 
-def build_branches(
-    df: pd.DataFrame,
-    candidate_indices: List[int],
-    target_row: pd.Series,
-) -> List[Branch]:
+def build_branches(df: pd.DataFrame, candidate_indices: List[int], target_row: pd.Series) -> List[Branch]:
     grouped = {}
-
     for idx in candidate_indices:
         row = df.loc[idx]
-
-        key_parts = [
-            safe_str(row.get("issue")),
-            safe_str(row.get("frame")),
-        ]
-
-        branch_key = " | ".join(
-            [part for part in key_parts if part]
-        ) or "unknown"
-
-        grouped.setdefault(
-            branch_key,
-            [],
-        ).append(idx)
+        key_parts = [safe_str(row.get("issue")), safe_str(row.get("frame"))]
+        branch_key = " | ".join([part for part in key_parts if part]) or "unknown"
+        grouped.setdefault(branch_key, []).append(idx)
 
     branches = []
-
     for branch_key, indices in grouped.items():
-        upper_bound = max(
-            estimate_upper_bound(
-                target_row,
-                df.loc[idx],
-            )
-            for idx in indices
-        )
+        upper_bound = max(estimate_upper_bound(target_row, df.loc[idx]) for idx in indices)
+        branches.append(Branch(upper_bound=upper_bound, branch_key=branch_key, candidate_indices=indices))
 
-        branches.append(
-            Branch(
-                upper_bound=upper_bound,
-                branch_key=branch_key,
-                candidate_indices=indices,
-            )
-        )
-
-    branches.sort(
-        key=lambda branch: branch.upper_bound,
-        reverse=True,
-    )
-
+    branches.sort(key=lambda branch: branch.upper_bound, reverse=True)
     return branches
 
 
-def is_recommendation_suitable(
-    best: Optional[Dict],
-    min_score: float,
-    min_relevance: float,
-) -> bool:
+def is_recommendation_suitable(best: Optional[Dict], min_score: float, min_relevance: float) -> bool:
     if not best:
         return False
-
-    final_score = safe_float(
-        best.get("final_score"),
-        0.0,
-    )
-
+    final_score = safe_float(best.get("final_score"), 0.0)
     detail = best.get("score_detail", {}) or {}
-
-    rel = safe_float(
-        detail.get("relevance_score"),
-        0.0,
-    )
-
+    rel = safe_float(detail.get("relevance_score"), 0.0)
     return final_score >= min_score and rel >= min_relevance
 
 
-def naver_search_news(
-    query: str,
-    display: int = DEFAULT_TOP_K_SEARCH,
-) -> List[Dict]:
+def naver_search_news(query: str, display: int = DEFAULT_TOP_K_SEARCH) -> List[Dict]:
     import os
 
     client_id = os.getenv("NAVER_CLIENT_ID")
     client_secret = os.getenv("NAVER_CLIENT_SECRET")
-
     if not client_id or not client_secret:
         return []
 
@@ -683,7 +476,6 @@ def naver_search_news(
         "X-Naver-Client-Id": client_id,
         "X-Naver-Client-Secret": client_secret,
     }
-
     params = {
         "query": query,
         "display": min(display, 100),
@@ -691,20 +483,12 @@ def naver_search_news(
         "sort": "date",
     }
 
-    response = requests.get(
-        "https://openapi.naver.com/v1/search/news.json",
-        headers=headers,
-        params=params,
-        timeout=15,
-    )
-
+    response = requests.get(NAVER_NEWS_API_URL, headers=headers, params=params, timeout=15)
     response.raise_for_status()
 
     rows = []
-
     for item in response.json().get("items", []):
         url = item.get("originallink") or item.get("link") or ""
-
         rows.append(
             {
                 "issue": query,
@@ -721,26 +505,12 @@ def naver_search_news(
     return rows
 
 
-def build_naver_query(
-    target_row: pd.Series,
-    target_analysis: Dict,
-) -> str:
+def build_naver_query(target_row: pd.Series, target_analysis: Dict) -> str:
     topic = safe_str(target_analysis.get("topic"))
     title = safe_str(target_row.get("title"))
     issue = safe_str(target_row.get("issue"))
-
-    query_parts = [
-        topic,
-        issue,
-        title,
-    ]
-
-    query = " ".join(
-        part
-        for part in query_parts
-        if part
-    )
-
+    query_parts = [topic, issue, title]
+    query = " ".join(part for part in query_parts if part)
     return query[:120]
 
 
@@ -754,58 +524,35 @@ def run_bnb_on_candidates(
     reserve_calls: int = 0,
 ) -> Dict:
     target_row = df.loc[target_idx]
+    target_row = enrich_row_with_analysis_hints(target_row, target_analysis)
 
-    # B&B.
-    branches = build_branches(
-        df=df,
-        candidate_indices=candidate_indices,
-        target_row=target_row,
-    )
-
+    branches = build_branches(df=df, candidate_indices=candidate_indices, target_row=target_row)
     incumbent = None
     incumbent_score = -1.0
     evaluated = []
     visited = set()
     stop_reason = "exhausted"
 
-    # 종료 조건 1: optimality gap <= 10%
-    # 종료 조건 2: analyzer.py 호출 횟수 >= 5회
     while branches and budget.remaining() > reserve_calls:
-        branches.sort(
-            key=lambda branch: branch.upper_bound,
-            reverse=True,
-        )
-
+        branches.sort(key=lambda branch: branch.upper_bound, reverse=True)
         global_upper_bound = branches[0].upper_bound
 
         if incumbent is not None:
-            optimality_gap = max(
-                0.0,
-                (global_upper_bound - incumbent_score)
-                / max(global_upper_bound, 1.0),
-            )
-
-            # B&B: 최적성 gap이 10% 이하이면 탐색 중단
+            optimality_gap = max(0.0, (global_upper_bound - incumbent_score) / max(global_upper_bound, 1.0))
             if optimality_gap <= gap_threshold:
                 stop_reason = "optimality_gap"
                 break
 
         branch = branches.pop(0)
-
         branch.candidate_indices = sorted(
             branch.candidate_indices,
-            key=lambda idx: estimate_upper_bound(
-                target_row,
-                df.loc[idx],
-            ),
+            key=lambda idx: estimate_upper_bound(target_row, df.loc[idx]),
             reverse=True,
         )
 
         candidate_idx = None
-
         while branch.candidate_indices:
             idx = branch.candidate_indices.pop(0)
-
             if idx not in visited:
                 candidate_idx = idx
                 break
@@ -814,19 +561,16 @@ def run_bnb_on_candidates(
             continue
 
         visited.add(candidate_idx)
-
         candidate_row = df.loc[candidate_idx]
         candidate_row = crawl_candidate_if_needed(candidate_row)
 
         try:
-            candidate_analysis = get_or_create_analysis(
-                candidate_row,
-                budget,
-                analysis_cache,
-            )
+            candidate_analysis = get_or_create_analysis(candidate_row, budget, analysis_cache)
         except AnalyzerCallBudgetExceeded:
             stop_reason = "llm_call_limit"
             break
+
+        candidate_row = enrich_row_with_analysis_hints(candidate_row, candidate_analysis)
 
         score_detail = recommendation_score(
             target_row=target_row,
@@ -834,11 +578,7 @@ def run_bnb_on_candidates(
             target_analysis=target_analysis,
             candidate_analysis=candidate_analysis,
         )
-
-        final_score = safe_float(
-            score_detail.get("recommendation_score"),
-            0.0,
-        )
+        final_score = safe_float(score_detail.get("recommendation_score"), 0.0)
 
         record = {
             "candidate_idx": int(candidate_idx),
@@ -852,7 +592,6 @@ def run_bnb_on_candidates(
             "score_detail": score_detail,
             "candidate_analysis": candidate_analysis,
         }
-
         evaluated.append(record)
 
         if final_score > incumbent_score:
@@ -860,40 +599,20 @@ def run_bnb_on_candidates(
             incumbent = record
 
         if branch.candidate_indices:
-            branch.upper_bound = max(
-                estimate_upper_bound(
-                    target_row,
-                    df.loc[idx],
-                )
-                for idx in branch.candidate_indices
-            )
-
+            branch.upper_bound = max(estimate_upper_bound(target_row, df.loc[idx]) for idx in branch.candidate_indices)
             branches.append(branch)
 
-    remaining_upper_bound = max(
-        [
-            branch.upper_bound
-            for branch in branches
-        ],
-        default=incumbent_score if incumbent is not None else 0.0,
-    )
-
+    remaining_upper_bound = max([branch.upper_bound for branch in branches], default=incumbent_score if incumbent is not None else 0.0)
     if incumbent is None:
         final_gap = None
     else:
-        final_gap = max(
-            0.0,
-            (remaining_upper_bound - incumbent_score)
-            / max(remaining_upper_bound, 1.0),
-        )
+        final_gap = max(0.0, (remaining_upper_bound - incumbent_score) / max(remaining_upper_bound, 1.0))
 
     return {
         "best": incumbent,
         "evaluated": evaluated,
         "stop_reason": stop_reason,
-        "optimality_gap": None
-        if final_gap is None
-        else round(final_gap, 4),
+        "optimality_gap": None if final_gap is None else round(final_gap, 4),
     }
 
 
@@ -911,38 +630,24 @@ def branch_and_bound_recommend(
     min_relevance: float = 60.0,
 ) -> Dict:
     global analysis_cache
-
     analysis_cache = {}
 
-    budget = AnalyzerCallBudget(
-        max_calls=max_llm_calls,
-    )
+    df = df.copy()
+    budget = AnalyzerCallBudget(max_calls=max_llm_calls)
 
     target_row = df.loc[target_idx]
+    target_analysis = get_or_create_analysis(target_row, budget, analysis_cache)
+    target_row = enrich_row_with_analysis_hints(target_row, target_analysis)
+    for col in ["issue", "issue_tags", "frame"]:
+        df.at[target_idx, col] = target_row.get(col)
 
-    target_analysis = get_or_create_analysis(
-        target_row,
-        budget,
-        analysis_cache,
-    )
-
-    candidate_indices = [
-        idx
-        for idx in df.index.tolist()
-        if idx != target_idx
-    ]
+    candidate_indices = [idx for idx in df.index.tolist() if idx != target_idx]
 
     if "url" in df.columns:
-        target_url = safe_str(target_row.get("url"))
-
-        candidate_indices = [
-            idx
-            for idx in candidate_indices
-            if safe_str(df.loc[idx].get("url")) != target_url
-        ]
+        target_url = safe_str(target_row.get("url")).strip()
+        candidate_indices = [idx for idx in candidate_indices if safe_str(df.loc[idx].get("url")).strip() != target_url]
 
     reserve_calls = 2 if use_naver else 0
-
     db_result = run_bnb_on_candidates(
         df=df,
         target_idx=target_idx,
@@ -957,89 +662,63 @@ def branch_and_bound_recommend(
     search_used = False
     search_result = None
 
-    if use_naver and not is_recommendation_suitable(
-        best,
-        min_score=min_score,
-        min_relevance=min_relevance,
-    ):
-        query = build_naver_query(
-            target_row,
-            target_analysis,
-        )
-
-        search_rows = naver_search_news(
-            query=query,
-            display=naver_display,
-        )
+    if use_naver and not is_recommendation_suitable(best, min_score=min_score, min_relevance=min_relevance):
+        query = build_naver_query(target_row, target_analysis)
+        search_rows = naver_search_news(query=query, display=naver_display)
 
         if search_rows and budget.remaining() > 0:
             search_used = True
-
             start_idx = len(df)
+            df = pd.concat([df, pd.DataFrame(search_rows)], ignore_index=True)
 
-            df = pd.concat(
-                [
-                    df,
-                    pd.DataFrame(search_rows),
-                ],
-                ignore_index=True,
-            )
+            target_url = safe_str(target_row.get("url")).strip()
+            seen_urls = set()
+            search_indices = []
+            for idx in range(start_idx, len(df)):
+                candidate_url = safe_str(df.loc[idx].get("url")).strip()
+                if not candidate_url or candidate_url == target_url or candidate_url in seen_urls:
+                    continue
+                seen_urls.add(candidate_url)
+                search_indices.append(idx)
 
-            search_indices = list(
-                range(
-                    start_idx,
-                    len(df),
+            if search_indices:
+                search_result = run_bnb_on_candidates(
+                    df=df,
+                    target_idx=target_idx,
+                    target_analysis=target_analysis,
+                    candidate_indices=search_indices,
+                    budget=budget,
+                    gap_threshold=gap_threshold,
+                    reserve_calls=0,
                 )
-            )
-
-            search_result = run_bnb_on_candidates(
-                df=df,
-                target_idx=target_idx,
-                target_analysis=target_analysis,
-                candidate_indices=search_indices,
-                budget=budget,
-                gap_threshold=gap_threshold,
-                reserve_calls=0,
-            )
-
-            search_best = search_result.get("best")
-
-            if search_best and (
-                best is None
-                or safe_float(search_best.get("final_score"), 0.0)
-                > safe_float(best.get("final_score"), 0.0)
-            ):
-                best = search_best
+                search_best = search_result.get("best")
+                if search_best and (best is None or safe_float(search_best.get("final_score"), 0.0) > safe_float(best.get("final_score"), 0.0)):
+                    best = search_best
+            else:
+                search_result = {
+                    "best": None,
+                    "evaluated": [],
+                    "stop_reason": "no_search_candidates_after_filter",
+                    "optimality_gap": None,
+                }
 
     all_evaluated = []
     all_evaluated.extend(db_result.get("evaluated", []))
-
     if search_result:
         all_evaluated.extend(search_result.get("evaluated", []))
 
     if search_result and search_result.get("stop_reason") == "optimality_gap":
         stop_reason = "optimality_gap"
         final_gap = search_result.get("optimality_gap")
-
     elif db_result.get("stop_reason") == "optimality_gap":
         stop_reason = "optimality_gap"
         final_gap = db_result.get("optimality_gap")
-
     elif budget.calls >= max_llm_calls:
         stop_reason = "llm_call_limit"
-        final_gap = (
-            search_result.get("optimality_gap")
-            if search_result
-            else db_result.get("optimality_gap")
-        )
-
+        final_gap = search_result.get("optimality_gap") if search_result else db_result.get("optimality_gap")
     else:
         stop_reason = "exhausted"
-        final_gap = (
-            search_result.get("optimality_gap")
-            if search_result
-            else db_result.get("optimality_gap")
-        )
+        final_gap = search_result.get("optimality_gap") if search_result else db_result.get("optimality_gap")
 
     return {
         "target_idx": int(target_idx),
@@ -1061,9 +740,8 @@ def branch_and_bound_recommend(
     }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
-
     parser.add_argument("--input", default="issue_news_db_with_content.csv")
     parser.add_argument("--output", default="recommendation_result.json")
     parser.add_argument("--url", default="")
@@ -1075,28 +753,16 @@ def main():
     parser.add_argument("--min-score", type=float, default=70.0)
     parser.add_argument("--min-relevance", type=float, default=60.0)
     parser.add_argument("--encoding", default="utf-8-sig")
-
     args = parser.parse_args()
 
-    df = pd.read_csv(
-        args.input,
-        encoding=args.encoding,
-    )
+    df = pd.read_csv(args.input, encoding=args.encoding)
 
     if args.url:
-        df, target_idx = append_or_find_target_url(
-            df=df,
-            news_url=args.url,
-        )
-
+        df, target_idx = append_or_find_target_url(df=df, news_url=args.url)
     elif args.target_idx is not None:
         target_idx = args.target_idx
-
     else:
-        raise ValueError(
-            "추천 기준 기사가 필요합니다. "
-            "--url 뉴스기사URL 또는 --target-idx 행번호 중 하나를 입력하세요."
-        )
+        raise ValueError("추천 기준 기사가 필요합니다. --url 뉴스기사URL 또는 --target-idx 행번호 중 하나를 입력하세요.")
 
     result = branch_and_bound_recommend(
         df=df,
@@ -1109,28 +775,13 @@ def main():
         min_relevance=args.min_relevance,
     )
 
-    with open(
-        args.output,
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            result,
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
+    with open(args.output, "w", encoding="utf-8") as file:
+        json.dump(result, file, ensure_ascii=False, indent=2)
 
-    print_result_summary(
-        result,
-        args.output,
-    )
+    print_result_summary(result, args.output)
 
 
-def print_result_summary(
-    result: Dict,
-    output_path: str,
-):
+def print_result_summary(result: Dict, output_path: str) -> None:
     print(
         json.dumps(
             {
@@ -1140,15 +791,9 @@ def print_result_summary(
                 "optimality_gap": result.get("optimality_gap"),
                 "search_used": result.get("search_used"),
                 "target_title": result.get("target_title"),
-                "best_title": (
-                    result.get("best_recommendation") or {}
-                ).get("title"),
-                "best_url": (
-                    result.get("best_recommendation") or {}
-                ).get("url"),
-                "best_score": (
-                    result.get("best_recommendation") or {}
-                ).get("final_score"),
+                "best_title": (result.get("best_recommendation") or {}).get("title"),
+                "best_url": (result.get("best_recommendation") or {}).get("url"),
+                "best_score": (result.get("best_recommendation") or {}).get("final_score"),
             },
             ensure_ascii=False,
             indent=2,
@@ -1158,6 +803,7 @@ def print_result_summary(
 
 if __name__ == "__main__":
     main()
+
 
 # def example_analysis_from_frame(frame: str) -> dict:
 #     """
