@@ -1,10 +1,10 @@
-"""LLM prompt definitions for the NewsPrism MVP."""
+"""LLM prompt definitions for the NewSight MVP."""
 
 from __future__ import annotations
 
 
 SYSTEM_PROMPT = """
-You are an expert media literacy AI analyzer for the 'NewsPrism' system.
+You are an expert media literacy AI analyzer for the 'NewSight' system.
 Your objective is to analyze how a news article is constructed and what viewpoint it foregrounds.
 
 [Core Principles]

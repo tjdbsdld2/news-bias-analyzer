@@ -1,4 +1,4 @@
-# NewsPrism MVP
+# NewSight MVP
 
 뉴스 기사 URL을 입력하면 기사 본문을 추출하고, LLM 또는 mock 데이터로 관점 분석을 수행한 뒤, SQLite 샘플 DB에서 다른 프레임의 기사를 추천하는 Streamlit 앱입니다.
 

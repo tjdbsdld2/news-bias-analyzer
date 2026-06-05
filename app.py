@@ -1,4 +1,4 @@
-"""Streamlit UI for the NewsPrism MVP."""
+"""Streamlit UI for the NewSight MVP."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def render_header() -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="main-title">🔮 NewsPrism</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">🔮 NewSight</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="sub-title">기사 URL 하나로, 내가 읽은 뉴스의 관점을 분석하고 다른 시선을 발견합니다.</div>',
         unsafe_allow_html=True,
@@ -110,7 +110,7 @@ def main() -> None:
     """Entry point for the Streamlit MVP app."""
     init_db()
 
-    st.set_page_config(page_title="|AI 뉴스 편향 분석", page_icon="🔮", layout="wide")
+    st.set_page_config(page_title="NewSight | AI 뉴스 관점 분석", page_icon="🔮", layout="wide")
     render_header()
 
     with st.container(border=True):
@@ -156,7 +156,7 @@ def main() -> None:
     st.write("")
     st.divider()
     st.caption(
-        "⚠️ **안내:** NewsPrism AI의 분석은 절대적인 정치적 판단이 아니라, "
+        "⚠️ **안내:** NewSight AI의 분석은 절대적인 정치적 판단이 아니라, "
         "독자의 비판적 뉴스 읽기를 돕는 미디어 리터러시 보조 도구입니다."
     )
 
