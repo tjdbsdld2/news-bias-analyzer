@@ -1,0 +1,48 @@
+{
+  "topic": "최저임금위원회 2차 전원회의 논의 사항",
+  "summary": "최저임금위 2차 회의에서 사용자 측은 업종별 차등 적용을, 근로자 측은 도급제 근로자의 최저임금 적용 확대를 주장하며 대립했다.",
+  "main_frame": "노사_이해관계_충돌",
+  "stance": "mixed",
+  "bias_axis": 45.0,
+  "bias_strength": 40.0,
+  "emotionality": 30.0,
+  "source_balance": 80.0,
+  "evidence_quality": 70.0,
+  "perspective_vector": {
+    "pro_government": 30.0,
+    "anti_government": 10.0,
+    "pro_business": 50.0,
+    "pro_labor": 85.0,
+    "pro_market": 40.0,
+    "pro_welfare": 65.0,
+    "pro_regulation": 60.0,
+    "anti_regulation": 40.0,
+    "risk_emphasis": 50.0,
+    "benefit_emphasis": 55.0
+  },
+  "loaded_terms": [
+    "상대적 박탈감",
+    "저임금 늪",
+    "고통받고 있다",
+    "아득하다"
+  ],
+  "missing_perspectives": [
+    "공익위원의 구체적인 중재안이나 판단 기준",
+    "실제 도급제 근로자의 구체적인 피해 사례"
+  ],
+  "reasoning": "기사 내용은 노사 양측의 주장을 기계적으로 균형 있게 배치하여 표면적 편향성은 낮으나, '상대적 박탈감'이라는 프레임을 통해 양측의 갈등을 부각하고 있다. 사용자 측은 경영난과 비용 부담을, 근로자 측은 보호 범위 확대를 주장하는 전형적인 노사 대립 구도를 보여주므로 bias_strength를 40으로 설정하였다. 최종 bias_axis는 양측의 주장이 팽팽하게 맞서고 있어 0으로 산출하였다.",
+  "content_bias": {
+    "favored_side": "노조/노동자",
+    "disfavored_side": "회사/사측",
+    "axis": 45.0,
+    "strength": 55.0,
+    "reasoning": "기사 내용에서 노동자 권리, 처우, 노조 입장이 상대적으로 더 강조된다."
+  },
+  "background_bias": {
+    "favored_side": "neutral",
+    "disfavored_side": "neutral",
+    "axis": 0.0,
+    "strength": 40.0,
+    "reasoning": "최저임금 결정이라는 사회적 갈등 사안을 다루고 있으며, 특히 '반도체 성과급'이라는 키워드를 통해 양측 모두가 느끼는 '상대적 박탈감'을 부각함으로써 갈등의 구조적 성격을 강조함."
+  }
+}
