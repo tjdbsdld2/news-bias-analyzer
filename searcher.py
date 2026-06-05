@@ -39,6 +39,62 @@ def _normalize_title(text: str) -> str:
     return " ".join((text or "").split()).strip().lower()
 
 
+def search_google_news_rss(query: str, limit: int = 3) -> list[dict]:
+    """Search Google News RSS directly with a text query."""
+    if not query.strip():
+        return []
+
+    params = urllib.parse.urlencode({"q": query, "hl": "ko", "gl": "KR", "ceid": "KR:ko"})
+    search_url = f"{GOOGLE_NEWS_RSS_URL}?{params}"
+
+    try:
+        with urllib.request.urlopen(search_url, timeout=10) as response:
+            payload = response.read()
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return []
+
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return []
+
+    seen_links: set[str] = set()
+    candidates: list[dict] = []
+
+    channel = root.find("channel")
+    if channel is None:
+        return []
+
+    for item in channel.findall("item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        published = (item.findtext("pubDate") or "").strip()
+        snippet = _clean_snippet(item.findtext("description") or "")
+
+        source_elem = item.find("source")
+        source = (source_elem.text or "").strip() if source_elem is not None and source_elem.text else "출처 정보 없음"
+
+        if not title or not link or link in seen_links:
+            continue
+
+        seen_links.add(link)
+        candidates.append(
+            {
+                "title": title,
+                "url": link,
+                "source": source,
+                "date": published or "날짜 정보 없음",
+                "snippet": snippet,
+                "search_query": query,
+            }
+        )
+
+        if len(candidates) >= limit:
+            break
+
+    return candidates
+
+
 def build_search_query(article: dict, analysis: dict) -> str:
     """
     Create a search query from analysis metadata.
@@ -82,55 +138,13 @@ def search_related_articles(article: dict, analysis: dict, limit: int = 3) -> li
     if not query:
         return []
 
-    params = urllib.parse.urlencode({"q": query, "hl": "ko", "gl": "KR", "ceid": "KR:ko"})
-    search_url = f"{GOOGLE_NEWS_RSS_URL}?{params}"
-
-    try:
-        with urllib.request.urlopen(search_url, timeout=10) as response:
-            payload = response.read()
-    except (urllib.error.URLError, TimeoutError, ValueError):
-        return []
-
-    try:
-        root = ET.fromstring(payload)
-    except ET.ParseError:
-        return []
-
     original_title = _normalize_title(article.get("title", ""))
-    seen_links: set[str] = set()
-    candidates: list[dict] = []
-
-    channel = root.find("channel")
-    if channel is None:
-        return []
-
-    for item in channel.findall("item"):
-        title = (item.findtext("title") or "").strip()
-        link = (item.findtext("link") or "").strip()
-        published = (item.findtext("pubDate") or "").strip()
-        snippet = _clean_snippet(item.findtext("description") or "")
-
-        source_elem = item.find("source")
-        source = (source_elem.text or "").strip() if source_elem is not None and source_elem.text else "출처 정보 없음"
-
-        if not title or not link or link in seen_links:
+    candidates = search_google_news_rss(query, limit=limit * 2)
+    filtered = []
+    for candidate in candidates:
+        if original_title and _normalize_title(candidate.get("title", "")) == original_title:
             continue
-        if original_title and _normalize_title(title) == original_title:
-            continue
-
-        seen_links.add(link)
-        candidates.append(
-            {
-                "title": title,
-                "url": link,
-                "source": source,
-                "date": published or "날짜 정보 없음",
-                "snippet": snippet,
-                "search_query": query,
-            }
-        )
-
-        if len(candidates) >= limit:
+        filtered.append(candidate)
+        if len(filtered) >= limit:
             break
-
-    return candidates
+    return filtered

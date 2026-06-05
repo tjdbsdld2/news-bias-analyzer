@@ -9,7 +9,15 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from prompts import SYSTEM_PROMPT, get_analysis_prompt
+from prompts import (
+    DATASET_TAGGING_SYSTEM_PROMPT,
+    EXTERNAL_GUIDANCE_SYSTEM_PROMPT,
+    FRAME_CANDIDATES,
+    SYSTEM_PROMPT,
+    get_analysis_prompt,
+    get_dataset_tagging_prompt,
+    get_external_candidate_prompt,
+)
 
 
 DEFAULT_ANALYSIS = {
@@ -24,6 +32,23 @@ DEFAULT_ANALYSIS = {
     "title_body_gap": "제목과 본문의 강조점이 얼마나 비슷한지 비교합니다.",
     "missing_perspective": "이 기사만 읽으면 놓칠 수 있는 이해관계자나 맥락을 설명합니다.",
 }
+
+DEFAULT_EXTERNAL_GUIDANCE_NOTE = (
+    "현재 DB에는 직접 대응되는 비교 기사가 없어, 같은 이슈를 다룰 가능성이 있는 외부 기사 후보를 함께 제시합니다. "
+    "아래 기사들은 확정된 반대 프레임 추천이 아니라 추가로 비교해볼 만한 읽기 후보입니다."
+)
+SUPPORTED_LLM_KEY_TEXT = (
+    "GOOGLE_API_KEY 또는 GEMINI_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY 또는 ANTHROPIC_API_KEY"
+)
+DEFAULT_DATASET_TAG = {
+    "sub_issue": "세부 쟁점 미분류",
+    "issue_tags": ["정책", "사회", "이슈"],
+    "frame": "갈등_구도",
+    "tone": "중립적",
+    "primary_voice": "정부",
+    "memo": "기사에서 관찰 가능한 강조점과 인용 주체를 바탕으로 분류한 mock 태깅 결과입니다.",
+}
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 def _strip_code_fences(text: str) -> str:
@@ -40,15 +65,24 @@ def _strip_code_fences(text: str) -> str:
     return cleaned
 
 
-def _normalize_issue_tags(value: Any) -> list[str]:
-    """Keep issue tags in a small, predictable list form."""
+def _normalize_tag_list(value: Any, limit: int) -> list[str]:
+    """Normalize a tag-like field into a short list."""
     if isinstance(value, str):
-        candidates = [item.strip() for item in re.split(r"[,/]", value) if item.strip()]
-        return candidates[:3]
+        candidates = [item.strip() for item in re.split(r"[,/;]", value) if item.strip()]
+        return candidates[:limit]
 
     if isinstance(value, list):
         tags = [str(item).strip() for item in value if str(item).strip()]
-        return tags[:3]
+        return tags[:limit]
+
+    return []
+
+
+def _normalize_issue_tags(value: Any) -> list[str]:
+    """Keep issue tags in a small, predictable list form."""
+    normalized = _normalize_tag_list(value, 3)
+    if normalized:
+        return normalized
 
     return DEFAULT_ANALYSIS["issue_tags"][:]
 
@@ -65,6 +99,26 @@ def _normalize_analysis(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             value = payload[key]
             normalized[key] = str(value).strip() if value not in (None, "") else DEFAULT_ANALYSIS[key]
+
+    return normalized
+
+
+def _normalize_dataset_tag(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize LLM dataset-tagging output into the expected schema."""
+    normalized = DEFAULT_DATASET_TAG.copy()
+    for key in DEFAULT_DATASET_TAG:
+        if key not in payload:
+            continue
+
+        if key == "issue_tags":
+            tags = _normalize_tag_list(payload[key], 5)
+            normalized[key] = tags if tags else DEFAULT_DATASET_TAG["issue_tags"][:]
+        elif key == "tone":
+            tone = str(payload[key]).strip()
+            normalized[key] = tone if tone in {"긍정적", "부정적", "중립적", "혼합"} else DEFAULT_DATASET_TAG["tone"]
+        else:
+            value = payload[key]
+            normalized[key] = str(value).strip() if value not in (None, "") else DEFAULT_DATASET_TAG[key]
 
     return normalized
 
@@ -98,11 +152,42 @@ def _build_mock_analysis(article: dict, notice: str) -> dict[str, Any]:
     return mock_result
 
 
+def _build_mock_dataset_tag(article: dict, issue: str, notice: str) -> dict[str, Any]:
+    """Create a mock dataset tag so data-building scripts still run without API keys."""
+    title = article.get("title", "입력 기사")
+    body = article.get("body", "")
+    source = article.get("source", "해당 기사")
+    excerpt = body[:140].strip()
+    issue_terms = [issue] if issue else []
+    if article.get("source"):
+        issue_terms.append(str(article["source"]).strip())
+
+    mock_tag = DEFAULT_DATASET_TAG.copy()
+    mock_tag.update(
+        {
+            "sub_issue": f"{issue} 관련 세부 쟁점" if issue else DEFAULT_DATASET_TAG["sub_issue"],
+            "issue_tags": issue_terms[:2] + ["정책", "사회"][: max(0, 3 - len(issue_terms[:2]))],
+            "memo": (
+                f"'{title}' 기사에서 {source}가 어떤 주체와 강조점을 전면에 두는지 기준으로 생성한 mock 태깅 결과입니다."
+                if excerpt
+                else DEFAULT_DATASET_TAG["memo"]
+            ),
+            "tagging_notice": notice,
+        }
+    )
+    return mock_tag
+
+
 def _parse_json_response(raw_text: str) -> dict[str, Any]:
     """Parse a model response into JSON, raising a helpful error if it fails."""
     try:
         cleaned = _strip_code_fences(raw_text)
-        payload = json.loads(cleaned)
+        start = cleaned.find("{")
+        if start == -1:
+            raise json.JSONDecodeError("No JSON object found", cleaned, 0)
+
+        decoder = json.JSONDecoder()
+        payload, _ = decoder.raw_decode(cleaned[start:])
     except json.JSONDecodeError as exc:
         raise ValueError("LLM 응답을 JSON으로 해석하지 못했습니다.") from exc
 
@@ -111,37 +196,220 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
     return payload
 
 
-def _call_openai(article: dict) -> str:
-    """Call the OpenAI Chat Completions API."""
+def _get_openai_client_kwargs() -> dict[str, str]:
+    """Build client options for either OpenAI or OpenRouter."""
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_api_key:
+        return {
+            "api_key": openrouter_api_key,
+            "base_url": OPENROUTER_BASE_URL,
+        }
+
+    return {"api_key": os.getenv("OPENAI_API_KEY", "")}
+
+
+def _get_openai_model_name() -> str:
+    """Choose the model name for OpenAI-compatible providers."""
+    if os.getenv("OPENROUTER_API_KEY"):
+        return os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+
+def _get_google_api_key() -> str:
+    """Return the configured Gemini API key, supporting both common env names."""
+    return os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+
+
+def _get_google_model_name() -> str:
+    """Choose the Gemini model name for Google AI Studio keys."""
+    return (
+        os.getenv("GOOGLE_MODEL", "")
+        or os.getenv("GEMINI_MODEL", "")
+        or "models/gemini-flash-lite-latest"
+    )
+
+
+def _get_openai_extra_headers() -> dict[str, str] | None:
+    """Add optional OpenRouter headers when using OpenRouter."""
+    if not os.getenv("OPENROUTER_API_KEY"):
+        return None
+
+    headers = {"X-Title": "NewSight"}
+    referer = os.getenv("OPENROUTER_HTTP_REFERER")
+    if referer:
+        headers["HTTP-Referer"] = referer
+    return headers
+
+
+def _call_openai_prompt(system_prompt: str, user_prompt: str) -> str:
+    """Call the OpenAI Chat Completions API with arbitrary prompts."""
     from openai import OpenAI
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = OpenAI(**_get_openai_client_kwargs())
     response = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=_get_openai_model_name(),
         temperature=0.2,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": get_analysis_prompt(article)},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
+        extra_headers=_get_openai_extra_headers(),
     )
     return response.choices[0].message.content or ""
 
 
-def _call_anthropic(article: dict) -> str:
-    """Call the Anthropic Messages API."""
+def _extract_google_response_text(response: Any) -> str:
+    """Extract text content from a Google GenAI response object."""
+    text = getattr(response, "text", None)
+    if text:
+        return text
+
+    parts: list[str] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        if content is None:
+            continue
+        for part in getattr(content, "parts", []) or []:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                parts.append(part_text)
+
+    if parts:
+        return "\n".join(parts)
+    raise ValueError("Gemini 응답에서 텍스트를 추출하지 못했습니다.")
+
+
+def _call_google_prompt(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str:
+    """Call the Gemini API using a Google AI Studio key."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=_get_google_api_key())
+    response = client.models.generate_content(
+        model=_get_google_model_name(),
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.2,
+            max_output_tokens=max_tokens,
+            response_mime_type="application/json",
+        ),
+    )
+    return _extract_google_response_text(response)
+
+
+def _call_anthropic_prompt(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str:
+    """Call the Anthropic Messages API with arbitrary prompts."""
     from anthropic import Anthropic
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     response = client.messages.create(
         model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest"),
         temperature=0.2,
-        max_tokens=1200,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": get_analysis_prompt(article)}],
+        max_tokens=max_tokens,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
     )
 
     text_blocks = [block.text for block in response.content if getattr(block, "type", "") == "text"]
     return "\n".join(text_blocks)
+
+
+def _call_llm_text(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str:
+    """Dispatch a prompt to whichever LLM provider is configured."""
+    if _get_google_api_key():
+        return _call_google_prompt(system_prompt, user_prompt, max_tokens=max_tokens)
+
+    if os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY"):
+        return _call_openai_prompt(system_prompt, user_prompt)
+
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return _call_anthropic_prompt(system_prompt, user_prompt, max_tokens=max_tokens)
+
+    raise RuntimeError(f"{SUPPORTED_LLM_KEY_TEXT}가 설정되지 않았습니다.")
+
+
+def _default_compare_point(analysis: dict[str, Any]) -> str:
+    """Create a simple fallback comparison point from the input article analysis."""
+    missing_perspective = str(analysis.get("missing_perspective", "")).strip()
+    if missing_perspective:
+        return missing_perspective
+    return "입력 기사에서 덜 다뤄진 이해관계자, 근거, 정책 효과를 함께 비교해보세요."
+
+
+def _build_mock_external_guidance(
+    analysis: dict[str, Any], candidates: list[dict], notice: str
+) -> dict[str, Any]:
+    """Return readable fallback guidance for external candidates."""
+    tags = analysis.get("issue_tags", [])
+    tag_text = ", ".join(tags[:2]) if isinstance(tags, list) and tags else "같은 이슈"
+    compare_point = _default_compare_point(analysis)
+
+    guidance_candidates = []
+    for candidate in candidates:
+        title = candidate.get("title", "후보 기사")
+        source = candidate.get("source", "외부 기사")
+        guidance_candidates.append(
+            {
+                "title": title,
+                "why_relevant": f"'{title}' 기사는 {tag_text}와 관련된 외부 기사 후보로 검색되어 {source}의 시선을 추가로 확인하는 데 도움이 될 수 있습니다.",
+                "what_to_compare": compare_point,
+            }
+        )
+
+    return {
+        "overall_note": DEFAULT_EXTERNAL_GUIDANCE_NOTE,
+        "candidates": guidance_candidates,
+        "explanation_notice": notice,
+    }
+
+
+def _normalize_external_guidance(payload: dict[str, Any], candidates: list[dict]) -> dict[str, Any]:
+    """Normalize LLM guidance for external candidate cards."""
+    overall_note = str(payload.get("overall_note", "")).strip() or DEFAULT_EXTERNAL_GUIDANCE_NOTE
+    raw_candidates = payload.get("candidates", [])
+    if not isinstance(raw_candidates, list):
+        raw_candidates = []
+
+    normalized_candidates = []
+    for index, candidate in enumerate(candidates):
+        raw_item = raw_candidates[index] if index < len(raw_candidates) and isinstance(raw_candidates[index], dict) else {}
+        normalized_candidates.append(
+            {
+                "title": candidate.get("title", "후보 기사"),
+                "why_relevant": str(raw_item.get("why_relevant", "")).strip()
+                or f"'{candidate.get('title', '후보 기사')}' 기사는 입력 기사와 연관된 주제를 다룰 가능성이 있어 비교 후보로 제시되었습니다.",
+                "what_to_compare": str(raw_item.get("what_to_compare", "")).strip()
+                or "입력 기사에서 덜 다뤄진 이해관계자, 근거, 강조점을 함께 비교해보세요.",
+            }
+        )
+
+    return {"overall_note": overall_note, "candidates": normalized_candidates}
+
+
+def llm_provider_available() -> bool:
+    """Return whether any supported LLM provider key is configured."""
+    load_dotenv()
+    return any(
+        [
+            bool(_get_google_api_key()),
+            bool(os.getenv("OPENAI_API_KEY")),
+            bool(os.getenv("OPENROUTER_API_KEY")),
+            bool(os.getenv("ANTHROPIC_API_KEY")),
+        ]
+    )
+
+
+def request_llm_json(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> dict[str, Any]:
+    """
+    Public helper for scripts that need a JSON-only LLM response.
+
+    Raises RuntimeError when no provider key exists and ValueError when parsing
+    fails, so callers can decide whether to skip or use mock fallbacks.
+    """
+    load_dotenv()
+    raw_text = _call_llm_text(system_prompt, user_prompt, max_tokens=max_tokens)
+    return _parse_json_response(raw_text)
 
 
 def analyze_article(article: dict) -> dict[str, Any]:
@@ -160,17 +428,12 @@ def analyze_article(article: dict) -> dict[str, Any]:
         )
 
     try:
-        if os.getenv("OPENAI_API_KEY"):
-            raw_text = _call_openai(article)
-            return _normalize_analysis(_parse_json_response(raw_text))
-
-        if os.getenv("ANTHROPIC_API_KEY"):
-            raw_text = _call_anthropic(article)
-            return _normalize_analysis(_parse_json_response(raw_text))
-
+        raw_text = _call_llm_text(SYSTEM_PROMPT, get_analysis_prompt(article))
+        return _normalize_analysis(_parse_json_response(raw_text))
+    except RuntimeError:
         return _build_mock_analysis(
             article,
-            "OPENAI_API_KEY 또는 ANTHROPIC_API_KEY가 없어 mock 분석 결과를 표시합니다.",
+            f"{SUPPORTED_LLM_KEY_TEXT}가 없어 mock 분석 결과를 표시합니다.",
         )
     except ImportError:
         return _build_mock_analysis(
@@ -187,6 +450,109 @@ def analyze_article(article: dict) -> dict[str, Any]:
             article,
             f"LLM 호출 중 오류가 발생했습니다: {exc}. mock 분석 결과로 대체했습니다.",
         )
+
+
+def explain_external_candidates(article: dict, analysis: dict, candidates: list[dict]) -> dict[str, Any]:
+    """
+    Provide short LLM guidance for externally searched candidate articles.
+
+    The guidance explains why each article may be worth comparing, but it does
+    not claim that the candidates are confirmed opposite-frame recommendations.
+    """
+    load_dotenv()
+
+    if not candidates:
+        return {"overall_note": "", "candidates": []}
+
+    try:
+        raw_text = _call_llm_text(
+            EXTERNAL_GUIDANCE_SYSTEM_PROMPT,
+            get_external_candidate_prompt(article, analysis, candidates),
+            max_tokens=1400,
+        )
+        return _normalize_external_guidance(_parse_json_response(raw_text), candidates)
+    except RuntimeError:
+        return _build_mock_external_guidance(
+            analysis,
+            candidates,
+            f"{SUPPORTED_LLM_KEY_TEXT}가 없어 외부 후보 기사 설명은 mock 안내문으로 표시합니다.",
+        )
+    except ImportError:
+        return _build_mock_external_guidance(
+            analysis,
+            candidates,
+            "LLM SDK가 없어 외부 후보 기사 설명은 mock 안내문으로 표시합니다.",
+        )
+    except ValueError as exc:
+        return _build_mock_external_guidance(
+            analysis,
+            candidates,
+            f"{exc} 외부 후보 기사 설명은 mock 안내문으로 대체했습니다.",
+        )
+    except Exception as exc:
+        return _build_mock_external_guidance(
+            analysis,
+            candidates,
+            f"외부 후보 기사 설명 생성 중 오류가 발생했습니다: {exc}. mock 안내문으로 대체했습니다.",
+        )
+
+
+def tag_article_metadata(article: dict, issue: str) -> dict[str, Any]:
+    """
+    Tag a collected article for recommendation-dataset construction.
+
+    Returns a dict with:
+    - sub_issue
+    - issue_tags
+    - frame
+    - tone
+    - primary_voice
+    - memo
+    - tagging_status
+    """
+    load_dotenv()
+
+    try:
+        payload = request_llm_json(
+            DATASET_TAGGING_SYSTEM_PROMPT,
+            get_dataset_tagging_prompt(issue, article),
+            max_tokens=1200,
+        )
+        normalized = _normalize_dataset_tag(payload)
+        normalized["tagging_status"] = "ok"
+        return normalized
+    except RuntimeError:
+        mock_tag = _build_mock_dataset_tag(
+            article,
+            issue,
+            f"{SUPPORTED_LLM_KEY_TEXT}가 없어 mock 태깅 결과를 사용했습니다.",
+        )
+        mock_tag["tagging_status"] = "mock"
+        return mock_tag
+    except ImportError:
+        mock_tag = _build_mock_dataset_tag(
+            article,
+            issue,
+            "LLM SDK가 없어 mock 태깅 결과를 사용했습니다.",
+        )
+        mock_tag["tagging_status"] = "mock"
+        return mock_tag
+    except ValueError:
+        mock_tag = _build_mock_dataset_tag(
+            article,
+            issue,
+            "LLM 응답 JSON 파싱에 실패해 mock 태깅 결과를 사용했습니다.",
+        )
+        mock_tag["tagging_status"] = "mock"
+        return mock_tag
+    except Exception as exc:
+        mock_tag = _build_mock_dataset_tag(
+            article,
+            issue,
+            f"LLM 태깅 중 오류가 발생했습니다: {exc}",
+        )
+        mock_tag["tagging_status"] = "failed"
+        return mock_tag
 
 
 def analyze_news(article_or_body: dict | str) -> dict[str, Any]:
