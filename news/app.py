@@ -1,961 +1,588 @@
-"""
-NewsPrism - 뉴스 편향 분석 시스템 (Flask 백엔드)
+"""NewSight Flask application."""
 
-## 실행 방법 (팀원용)
+from __future__ import annotations
 
-### 1. 가상환경 설정 (처음 한 번만)
-   python -m venv .venv
-   
-### 2. 가상환경 활성화
-   Windows PowerShell: .venv\Scripts\Activate.ps1
-   Windows CMD: .venv\Scripts\activate.bat
-   Mac/Linux: source .venv/bin/activate
-
-### 3. 패키지 설치
-   pip install -r requirements.txt
-
-### 4. 환경 설정 파일 생성 (.env)
-   news 폴더에 .env 파일 생성 후 다음 내용 추가:
-   PORT=5000
-   FLASK_ENV=development
-
-### 5. Flask 앱 실행
-   python app.py
-   또는 디버그 모드:
-   python -m flask run --debug
-
-### 6. 브라우저 접속
-   http://localhost:5000
-
-## 주의사항
-- 반드시 가상환경을 활성화한 후 실행하세요
-- .env 파일이 없으면 기본 포트 5000번으로 실행됩니다
-- requirements.txt에 모든 필요한 패키지가 포함되어 있습니다
-"""
-
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import difflib
+import html
+import logging
 import os
+import re
+from urllib.parse import urlparse
+
 from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
+from flask_cors import CORS
+
+from analyzer import analyze_article, explain_external_candidates
+from crawler import fetch_article
+from recommender import recommend_articles
+from searcher import search_related_articles
 
 
 load_dotenv()
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)
+logger = logging.getLogger(__name__)
+
+
+DATE_TIME_PATTERN = re.compile(
+    r"""
+    (?:
+        (?:오전|오후)\s*\d{1,2}시(?:\s*\d{1,2}분)? |
+        \d{1,2}시(?:\s*\d{1,2}분)? |
+        \d{1,2}분 |
+        (?:지난|오는|전날|당일)?\s*\d{1,2}일 |
+        \d{1,2}월\s*\d{1,2}일 |
+        \d{4}년(?:\s*\d{1,2}월(?:\s*\d{1,2}일)?)? |
+        \d+\s*(?:번|차|번째|회차)
+    )
+    """,
+    re.VERBOSE,
+)
+
+SIGNIFICANT_METRIC_PATTERN = re.compile(
+    r"""
+    (?:
+        (?:전년|전월|전분기|작년)\s*대비\s*\d[\d,]*(?:\.\d+)?\s*%\s*(?:증가|감소|상승|하락)? |
+        (?:매출|영업이익|점유율|비중|온라인\s*비중|고용|손실)\s*\d[\d,]*(?:\.\d+)?\s*% |
+        \d[\d,]*(?:\.\d+)?\s*%\s*(?:증가|감소|상승|하락|비중|점유율)? |
+        \d[\d,]*(?:\.\d+)?\s*(?:명|곳|건|개)\s*(?:매장|점포|업체|물류\s*거점|폐점|고용\s*불안|인력|노동자|사업장)? |
+        \d[\d,]*(?:\.\d+)?\s*(?:조|억|만)?\s*원\s*(?:매출|손실|감소|증가|영업이익|적자|흑자)? |
+        (?:매출|영업이익|점유율|비중|손실)\s*\d[\d,]*(?:\.\d+)?\s*(?:조|억|만)?\s*원
+    )
+    """,
+    re.VERBOSE,
+)
+
+CAUTION_PATTERN = re.compile(
+    r"논란|의혹|반발|우려|비판|공방|봉쇄|감금|책임(?!자)|사과|실패|부족|피해|강행|부담|혼란|참담함|충돌|무효|사퇴|진상규명"
+)
+
+HIGHLIGHT_RULES = [
+    ("quote", re.compile(r"[\"“][^\"”]{2,120}[\"”]")),
+    ("metric", SIGNIFICANT_METRIC_PATTERN),
+    ("caution", CAUTION_PATTERN),
+    (
+        "attribution",
+        re.compile(
+            r"밝혔(?:다|습니다)?|설명했(?:다|습니다)?|말했(?:다|습니다)?|주장했(?:다|습니다)?|전했다|강조했(?:다|습니다)?|사과했(?:다|습니다)?|촉구했(?:다|습니다)?"
+        ),
+    ),
+]
+
+CAUTION_GROUPS = {
+    "갈등 쟁점": {"논란", "반발", "비판", "공방", "봉쇄", "충돌", "강행"},
+    "책임 쟁점": {"책임", "사과", "실패", "무효", "사퇴", "진상규명"},
+    "피해 관점": {"피해", "부족", "부담", "혼란", "우려", "참담함"},
+}
+
+KEY_ACTION_PATTERN = re.compile(
+    r"상정(?:됐|되었|된다)|통과(?:됐|되었|된다)|추진(?:한|한다|하겠)|허용(?:한|한다|하겠)|"
+    r"개정(?:한|된다|하겠)|발표(?:했|한다)|도입(?:한|한다)|확대(?:한|한다)|축소(?:한|한다)|"
+    r"제시(?:했|한다)|예고(?:했|한다)|요구(?:했|한다)|촉구(?:했|한다)|나섰(?:다|습니다)"
+)
+
+ANNOTATED_SENTENCE_LIMIT = 20
+BODY_REST_CHAR_LIMIT = 900
+HIGHLIGHT_MATCH_THRESHOLD = 0.84
+VALID_URL_MESSAGE = "올바른 뉴스 기사 URL을 입력해 주세요. 예: https://..."
+ARTICLE_EXTRACTION_FAILURE_MESSAGE = (
+    "기사 본문을 충분히 추출하지 못했습니다. 언론사 원문 링크를 입력하거나 다른 기사 URL로 다시 시도해 주세요."
+)
+NO_RECOMMENDATION_MESSAGE = (
+    "현재 로컬 DB와 외부 검색에서 비교할 만한 기사 후보를 찾지 못했습니다. 다른 기사 URL로 다시 시도해 주세요."
+)
+EXTERNAL_SEARCH_FAILURE_MESSAGE = "외부 관련 기사 후보를 찾지 못했습니다."
+
+
+def _validate_input_url(url: str) -> str | None:
+    """Reject obviously invalid or dangerous URL inputs before crawling."""
+    if not url or len(url.strip()) < 12:
+        return VALID_URL_MESSAGE
+
+    lowered = url.strip().lower()
+    if lowered.startswith(("javascript:", "data:", "file:")):
+        return VALID_URL_MESSAGE
 
-# ============================================
-# HTML 템플릿 (인라인)
-# ============================================
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NewsPrism - 뉴스의 다른 시선을 발견하다</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
-    <style>
-        /* ========== CSS 스타일 ========== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        :root {
-            --primary: #1a1a2e;
-            --secondary: #16213e;
-            --accent: #0f3460;
-            --highlight: #e94560;
-            --text: #eee;
-            --text-secondary: #aaa;
-            --bg: #0f0f1e;
-            --card-bg: #1a1a2e;
-            --border: #2a2a3e;
-        }
-
-        body {
-            font-family: 'Noto Sans KR', sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            line-height: 1.6;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-
-        /* 헤더 */
-        .header {
-            background: var(--primary);
-            border-bottom: 2px solid var(--highlight);
-            padding: 20px 0;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-
-        .header-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .logo h1 {
-            font-size: 28px;
-            font-weight: 900;
-            letter-spacing: 2px;
-            color: var(--text);
-        }
-
-        .logo .prism {
-            color: var(--highlight);
-        }
-
-        .tagline {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 5px;
-        }
-
-        .nav {
-            display: flex;
-            gap: 30px;
-        }
-
-        .nav a {
-            color: var(--text);
-            text-decoration: none;
-            font-weight: 500;
-            transition: color 0.3s;
-        }
-
-        .nav a:hover {
-            color: var(--highlight);
-        }
-
-        /* 히어로 섹션 */
-        .hero {
-            padding: 80px 0 100px;
-            background: linear-gradient(135deg, var(--secondary) 0%, var(--accent) 100%);
-            text-align: center;
-        }
-
-        .hero-title {
-            font-size: 48px;
-            font-weight: 900;
-            margin-bottom: 20px;
-            line-height: 1.2;
-        }
-
-        .hero-subtitle {
-            font-size: 18px;
-            color: var(--text-secondary);
-            margin-bottom: 40px;
-        }
-
-        /* 검색 박스 */
-        .search-box {
-            max-width: 700px;
-            margin: 0 auto 15px;
-            display: flex;
-            gap: 10px;
-            background: var(--card-bg);
-            padding: 8px;
-            border-radius: 50px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }
-
-        .url-input {
-            flex: 1;
-            padding: 15px 25px;
-            border: none;
-            background: transparent;
-            color: var(--text);
-            font-size: 16px;
-            outline: none;
-        }
-
-        .url-input::placeholder {
-            color: var(--text-secondary);
-        }
-
-        .analyze-btn {
-            padding: 15px 35px;
-            background: var(--highlight);
-            color: white;
-            border: none;
-            border-radius: 50px;
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .analyze-btn:hover {
-            background: #d63651;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(233, 69, 96, 0.4);
-        }
-
-        .example-text {
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
-
-        /* 로딩 */
-        .loading {
-            text-align: center;
-            padding: 60px 20px;
-        }
-
-        .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid var(--border);
-            border-top-color: var(--highlight);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* 결과 섹션 */
-        .results {
-            padding: 60px 0;
-        }
-
-        /* 기사 카드 */
-        .article-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 30px;
-            margin-bottom: 40px;
-        }
-
-        .article-card.original {
-            border-left: 4px solid var(--highlight);
-        }
-
-        .card-header {
-            margin-bottom: 15px;
-        }
-
-        .badge {
-            display: inline-block;
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-
-        .badge-primary {
-            background: var(--highlight);
-            color: white;
-        }
-
-        .article-title {
-            font-size: 28px;
-            font-weight: 700;
-            margin-bottom: 15px;
-            line-height: 1.3;
-        }
-
-        .article-meta {
-            display: flex;
-            gap: 10px;
-            color: var(--text-secondary);
-            font-size: 14px;
-            margin-bottom: 20px;
-        }
-
-        .divider {
-            color: var(--border);
-        }
-
-        .article-summary {
-            color: var(--text-secondary);
-            line-height: 1.8;
-            margin-bottom: 20px;
-        }
-
-        .read-more {
-            color: var(--highlight);
-            text-decoration: none;
-            font-weight: 600;
-            transition: color 0.3s;
-        }
-
-        .read-more:hover {
-            color: #d63651;
-        }
-
-        /* 분석 섹션 */
-        .analysis-section {
-            margin-bottom: 60px;
-        }
-
-        .section-title {
-            font-size: 32px;
-            font-weight: 700;
-            margin-bottom: 10px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .section-subtitle {
-            color: var(--text-secondary);
-            margin-bottom: 30px;
-        }
-
-        .icon {
-            font-size: 28px;
-        }
-
-        .analysis-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-        }
-
-        .analysis-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 25px;
-        }
-
-        .analysis-card.highlight {
-            border-color: var(--highlight);
-            background: linear-gradient(135deg, var(--card-bg) 0%, rgba(233, 69, 96, 0.1) 100%);
-        }
-
-        .card-title {
-            font-size: 16px;
-            font-weight: 700;
-            color: var(--text-secondary);
-            margin-bottom: 15px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .card-content {
-            font-size: 18px;
-            font-weight: 600;
-        }
-
-        /* 점수 바 */
-        .score-container {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .score-bar {
-            flex: 1;
-            height: 12px;
-            background: var(--border);
-            border-radius: 10px;
-            overflow: hidden;
-        }
-
-        .score-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--highlight) 0%, #4ecca3 100%);
-            transition: width 0.5s ease;
-        }
-
-        .score-text {
-            font-size: 24px;
-            font-weight: 700;
-            color: var(--highlight);
-        }
-
-        /* 인용 리스트 */
-        .citations-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .citation-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px;
-            background: var(--bg);
-            border-radius: 8px;
-        }
-
-        .citation-source {
-            font-weight: 600;
-        }
-
-        .citation-count {
-            color: var(--highlight);
-            font-weight: 700;
-        }
-
-        /* 관점 리스트 */
-        .perspectives-list {
-            list-style: none;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .perspectives-list li {
-            padding-left: 20px;
-            position: relative;
-        }
-
-        .perspectives-list li::before {
-            content: "▸";
-            position: absolute;
-            left: 0;
-            color: var(--highlight);
-            font-weight: 700;
-        }
-
-        /* 추천 기사 */
-        .recommendations-section {
-            margin-bottom: 60px;
-        }
-
-        .recommendations-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 25px;
-        }
-
-        .recommendation-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 25px;
-            transition: all 0.3s;
-            cursor: pointer;
-        }
-
-        .recommendation-card:hover {
-            transform: translateY(-5px);
-            border-color: var(--highlight);
-            box-shadow: 0 10px 30px rgba(233, 69, 96, 0.2);
-        }
-
-        .rec-badge {
-            display: inline-block;
-            padding: 5px 12px;
-            background: rgba(233, 69, 96, 0.2);
-            color: var(--highlight);
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 700;
-            margin-bottom: 15px;
-        }
-
-        .rec-title {
-            font-size: 20px;
-            font-weight: 700;
-            margin-bottom: 10px;
-            line-height: 1.3;
-        }
-
-        .rec-meta {
-            display: flex;
-            gap: 10px;
-            color: var(--text-secondary);
-            font-size: 13px;
-        }
-
-        /* 소개 섹션 */
-        .about {
-            padding: 80px 0;
-            background: var(--secondary);
-        }
-
-        .about-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 30px;
-            margin-top: 40px;
-        }
-
-        .about-card {
-            text-align: center;
-            padding: 30px;
-        }
-
-        .about-icon {
-            font-size: 48px;
-            margin-bottom: 20px;
-        }
-
-        .about-card h3 {
-            font-size: 22px;
-            margin-bottom: 15px;
-        }
-
-        .about-card p {
-            color: var(--text-secondary);
-            line-height: 1.8;
-        }
-
-        /* 푸터 */
-        .footer {
-            background: var(--primary);
-            padding: 40px 0;
-            text-align: center;
-            border-top: 2px solid var(--highlight);
-        }
-
-        .footer p {
-            color: var(--text-secondary);
-            margin-bottom: 10px;
-        }
-
-        .disclaimer {
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
-
-        /* 반응형 */
-        @media (max-width: 768px) {
-            .hero-title {
-                font-size: 32px;
-            }
-            
-            .search-box {
-                flex-direction: column;
-                border-radius: 12px;
-            }
-            
-            .analyze-btn {
-                border-radius: 8px;
-                justify-content: center;
-            }
-            
-            .header-content {
-                flex-direction: column;
-                gap: 20px;
-            }
-            
-            .nav {
-                gap: 15px;
-            }
-        }
-    </style>
-</head>
-<body>
-    <!-- 헤더 -->
-    <header class="header">
-        <div class="container">
-            <div class="header-content">
-                <div class="logo">
-                    <h1>NEWS<span class="prism">PRISM</span></h1>
-                    <p class="tagline">뉴스의 다른 시선을 발견하다</p>
-                </div>
-                <nav class="nav">
-                    <a href="#about">소개</a>
-                    <a href="#how-it-works">작동 방식</a>
-                    <a href="https://github.com/yourusername/newsprism" target="_blank">GitHub</a>
-                </nav>
-            </div>
-        </div>
-    </header>
-
-    <!-- 메인 히어로 섹션 -->
-    <section class="hero">
-        <div class="container">
-            <div class="hero-content">
-                <h2 class="hero-title">하나의 기사, 여러 개의 관점</h2>
-                <p class="hero-subtitle">
-                    AI가 뉴스 기사의 프레이밍을 분석하고,<br>
-                    반대 시각의 기사를 자동으로 추천합니다.
-                </p>
-                
-                <!-- URL 입력 폼 -->
-                <div class="search-box">
-                    <input 
-                        type="url" 
-                        id="newsUrl" 
-                        placeholder="뉴스 기사 URL을 입력하세요 (예: https://news.example.com/article/123)"
-                        class="url-input"
-                    >
-                    <button id="analyzeBtn" class="analyze-btn">
-                        <span class="btn-text">분석하기</span>
-                        <span class="btn-icon">→</span>
-                    </button>
-                </div>
-                
-                <p class="example-text">
-                    예시: 네이버뉴스, 다음뉴스, 언론사 직접 링크 등
-                </p>
-            </div>
-        </div>
-    </section>
-
-    <!-- 로딩 인디케이터 -->
-    <div id="loading" class="loading hidden">
-        <div class="spinner"></div>
-        <p>기사를 분석하고 있습니다...</p>
-    </div>
-
-    <!-- 결과 섹션 -->
-    <section id="results" class="results hidden">
-        <div class="container">
-            <!-- 원본 기사 정보 -->
-            <div class="article-card original">
-                <div class="card-header">
-                    <span class="badge badge-primary">분석한 기사</span>
-                </div>
-                <h3 id="articleTitle" class="article-title"></h3>
-                <div class="article-meta">
-                    <span id="articleSource" class="source"></span>
-                    <span class="divider">|</span>
-                    <span id="articleDate" class="date"></span>
-                </div>
-                <p id="articleSummary" class="article-summary"></p>
-                <a id="articleUrl" href="#" target="_blank" class="read-more">원문 보기 →</a>
-            </div>
-
-            <!-- 분석 결과 -->
-            <div class="analysis-section">
-                <h3 class="section-title">
-                    <span class="icon">📊</span>
-                    AI 분석 결과
-                </h3>
-                
-                <div class="analysis-grid">
-                    <!-- 프레이밍 -->
-                    <div class="analysis-card">
-                        <h4 class="card-title">프레이밍 방식</h4>
-                        <p id="framing" class="card-content"></p>
-                    </div>
-                    
-                    <!-- 중립성 점수 -->
-                    <div class="analysis-card">
-                        <h4 class="card-title">표현 중립성</h4>
-                        <div class="score-container">
-                            <div class="score-bar">
-                                <div id="neutralityBar" class="score-fill"></div>
-                            </div>
-                            <span id="neutralityScore" class="score-text"></span>
-                        </div>
-                    </div>
-                    
-                    <!-- 인용 분포 -->
-                    <div class="analysis-card">
-                        <h4 class="card-title">인용 출처 분포</h4>
-                        <div id="citations" class="citations-list"></div>
-                    </div>
-                    
-                    <!-- 누락된 관점 -->
-                    <div class="analysis-card highlight">
-                        <h4 class="card-title">누락된 관점</h4>
-                        <ul id="missingPerspectives" class="perspectives-list"></ul>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 추천 기사 -->
-            <div class="recommendations-section">
-                <h3 class="section-title">
-                    <span class="icon">🔍</span>
-                    다른 시각의 기사
-                </h3>
-                <p class="section-subtitle">같은 사건을 다르게 다룬 기사들입니다</p>
-                
-                <div id="recommendations" class="recommendations-grid"></div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 소개 섹션 -->
-    <section id="about" class="about">
-        <div class="container">
-            <h2 class="section-title">NewsPrism이란?</h2>
-            <div class="about-grid">
-                <div class="about-card">
-                    <div class="about-icon">🎯</div>
-                    <h3>문제 인식</h3>
-                    <p>독자는 보통 하나의 기사만 읽고 사건을 이해합니다. 하지만 언론사마다 강조하는 정보와 표현이 다릅니다.</p>
-                </div>
-                <div class="about-card">
-                    <div class="about-icon">🤖</div>
-                    <h3>AI 분석</h3>
-                    <p>Claude AI가 기사의 프레이밍, 표현 방식, 인용 분포를 자동으로 분석합니다.</p>
-                </div>
-                <div class="about-card">
-                    <div class="about-icon">📰</div>
-                    <h3>다각도 이해</h3>
-                    <p>반대 관점의 기사를 추천하여 사건을 입체적으로 이해할 수 있도록 돕습니다.</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 푸터 -->
-    <footer class="footer">
-        <div class="container">
-            <p>&copy; 2024 NewsPrism. 미디어 리터러시를 위한 AI 도구.</p>
-            <p class="disclaimer">
-                ⚠️ AI 분석은 보조 도구입니다. 최종 판단은 독자의 몫입니다.
-            </p>
-        </div>
-    </footer>
-
-    <script>
-        // ========== JavaScript 로직 ==========
-        
-        // DOM 요소
-        const analyzeBtn = document.getElementById('analyzeBtn');
-        const newsUrlInput = document.getElementById('newsUrl');
-        const loadingSection = document.getElementById('loading');
-        const resultsSection = document.getElementById('results');
-
-        // 분석 버튼 클릭 이벤트
-        analyzeBtn.addEventListener('click', async () => {
-            const url = newsUrlInput.value.trim();
-            
-            if (!url) {
-                alert('뉴스 기사 URL을 입력해주세요.');
-                return;
-            }
-            
-            if (!isValidUrl(url)) {
-                alert('올바른 URL 형식이 아닙니다.');
-                return;
-            }
-            
-            await analyzeArticle(url);
-        });
-
-        // Enter 키 지원
-        newsUrlInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                analyzeBtn.click();
-            }
-        });
-
-        // URL 유효성 검사
-        function isValidUrl(string) {
-            try {
-                new URL(string);
-                return true;
-            } catch (_) {
-                return false;
-            }
-        }
-
-        // 기사 분석 함수
-        async function analyzeArticle(url) {
-            // UI 상태 변경
-            loadingSection.classList.remove('hidden');
-            resultsSection.classList.add('hidden');
-            
-            try {
-                const response = await fetch('/api/analyze', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ url: url })
-                });
-                
-                if (!response.ok) {
-                    throw new Error('분석에 실패했습니다.');
-                }
-                
-                const data = await response.json();
-                displayResults(data);
-                
-            } catch (error) {
-                alert('오류가 발생했습니다: ' + error.message);
-                loadingSection.classList.add('hidden');
-            }
-        }
-
-        // 결과 표시 함수
-        function displayResults(data) {
-            const { article, analysis, recommendations } = data;
-            
-            // 원본 기사 정보
-            document.getElementById('articleTitle').textContent = article.title;
-            document.getElementById('articleSource').textContent = article.source;
-            document.getElementById('articleDate').textContent = article.date;
-            document.getElementById('articleSummary').textContent = article.summary;
-            document.getElementById('articleUrl').href = article.url;
-            
-            // 분석 결과
-            document.getElementById('framing').textContent = analysis.framing;
-            
-            // 중립성 점수
-            const neutralityScore = analysis.neutrality;
-            document.getElementById('neutralityScore').textContent = `${neutralityScore}/10`;
-            document.getElementById('neutralityBar').style.width = `${neutralityScore * 10}%`;
-            
-            // 인용 분포
-            const citationsHtml = Object.entries(analysis.citations)
-                .map(([source, count]) => `
-                    <div class="citation-item">
-                        <span class="citation-source">${source}</span>
-                        <span class="citation-count">${count}회</span>
-                    </div>
-                `)
-                .join('');
-            document.getElementById('citations').innerHTML = citationsHtml;
-            
-            // 누락된 관점
-            const perspectivesHtml = analysis.missing_perspectives
-                .map(perspective => `<li>${perspective}</li>`)
-                .join('');
-            document.getElementById('missingPerspectives').innerHTML = perspectivesHtml;
-            
-            // 추천 기사
-            const recommendationsHtml = recommendations
-                .map(rec => `
-                    <div class="recommendation-card" onclick="window.open('${rec.url}', '_blank')">
-                        <span class="rec-badge">${rec.framing}</span>
-                        <h4 class="rec-title">${rec.title}</h4>
-                        <div class="rec-meta">
-                            <span>${rec.source}</span>
-                            <span class="divider">|</span>
-                            <span>${rec.date}</span>
-                        </div>
-                    </div>
-                `)
-                .join('');
-            document.getElementById('recommendations').innerHTML = recommendationsHtml;
-            
-            // UI 상태 변경
-            loadingSection.classList.add('hidden');
-            resultsSection.classList.remove('hidden');
-            
-            // 결과 섹션으로 스크롤
-            resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-    </script>
-</body>
-</html>
-"""
-
-# ============================================
-# Flask 라우트
-# ============================================
-
-@app.route('/')
-def index():
-    """메인 홈페이지"""
-    return HTML_TEMPLATE
-
-@app.route('/api/analyze', methods=['POST'])
-def analyze():
-    """
-    뉴스 분석 API
-    TODO: 팀원이 구현한 모듈과 연동
-    """
     try:
-        data = request.get_json()
-        url = data.get('url')
-        
-        if not url:
-            return jsonify({"error": "URL을 입력해주세요"}), 400
-        
-        # ========================================
-        # TODO: 실제 분석 로직 연동
-        # ========================================
-        # from backend.crawler import crawl_article
-        # from backend.analyzer import analyze_article
-        # from backend.recommender import recommend_articles
-        # 
-        # article_data = crawl_article(url)
-        # analysis_result = analyze_article(article_data)
-        # recommendations = recommend_articles(analysis_result)
-        # ========================================
-        
-        # 더미 응답 (개발용)
-        dummy_response = {
-            "article": {
-                "title": "정부, 새로운 경제정책 발표",
-                "source": "뉴스프리즘",
-                "date": "2024-01-15",
-                "url": url,
-                "summary": "정부가 오늘 새로운 경제정책을 발표했습니다. 주요 내용은 중소기업 지원 확대와 세제 개편입니다."
-            },
-            "analysis": {
-                "framing": "정부 정책 중심",
-                "neutrality": 6,
-                "citations": {
-                    "정부 관계자": 5,
-                    "전문가": 2,
-                    "시민단체": 1
-                },
-                "title_match": 8,
-                "missing_perspectives": [
-                    "야당의 반대 입장",
-                    "중소기업 현장 목소리",
-                    "경제학자들의 우려"
-                ],
-                "tags": ["경제", "정부정책", "재정"]
-            },
-            "recommendations": [
+        parsed = urlparse(url)
+    except ValueError:
+        return VALID_URL_MESSAGE
+
+    if parsed.scheme not in {"http", "https"}:
+        return VALID_URL_MESSAGE
+    if not parsed.netloc or "." not in parsed.netloc:
+        return VALID_URL_MESSAGE
+    if len(url) > 2048:
+        return VALID_URL_MESSAGE
+
+    return None
+
+
+def _article_payload_is_usable(article: dict | None) -> bool:
+    """Double-check crawler output before sending it to the analyzer."""
+    if not isinstance(article, dict):
+        return False
+
+    title = str(article.get("title", "")).strip()
+    body = str(article.get("body", "")).strip()
+    if not title or not body:
+        return False
+    if len(body) < 200:
+        return False
+    return True
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split article body into readable sentence-like chunks."""
+    normalized = re.sub(r"\s+", " ", (text or "").strip())
+    if not normalized:
+        return []
+
+    parts = re.split(
+        r"(?<=[.!?])\s+|(?<=다\.)\s+|(?<=요\.)\s+|(?<=죠\.)\s+|(?<=다)\s+(?=[\"'“‘A-Z가-힣])",
+        normalized,
+    )
+    sentences = [part.strip() for part in parts if part.strip()]
+    return sentences or [normalized]
+
+
+def _mask_date_time_tokens(text: str) -> str:
+    """Mask date/time/order tokens while preserving string length."""
+    return DATE_TIME_PATTERN.sub(lambda match: " " * len(match.group(0)), text)
+
+
+def _find_significant_metric(sentence: str) -> re.Match[str] | None:
+    """Find only meaningful statistical or scale-related numbers."""
+    masked = _mask_date_time_tokens(sentence)
+    return SIGNIFICANT_METRIC_PATTERN.search(masked)
+
+
+def _iter_significant_metric_matches(sentence: str):
+    """Yield meaningful metric matches with original string offsets preserved."""
+    masked = _mask_date_time_tokens(sentence)
+    return SIGNIFICANT_METRIC_PATTERN.finditer(masked)
+
+
+def _find_caution_term(sentence: str) -> str | None:
+    """Return the first caution term worth surfacing, avoiding false positives like 책임자."""
+    match = CAUTION_PATTERN.search(sentence)
+    return match.group(0) if match else None
+
+
+def _build_body_focus_note(labels: list[str], custom_focus: str = "") -> str:
+    """Summarize what kinds of highlighted sentences the reader should pay attention to."""
+    if custom_focus:
+        return custom_focus
+
+    if not labels:
+        return "표시된 문장은 기사 방향을 크게 정하는 부분입니다. 초반 핵심 서술, 근거 제시, 관점 전환 문장을 중심으로 비교해 보세요."
+
+    ordered: list[str] = []
+    for label in labels:
+        if label not in ordered:
+            ordered.append(label)
+
+    mapping = {
+        "핵심 주장": "기사의 결론이나 조치가 드러나는 문장",
+        "핵심 서술": "기사 초반의 문제 설정 문장",
+        "직접 발화": "누가 어떤 표현을 직접 말했는지 보여주는 문장",
+        "주장 전달": "특정 주체의 설명이 실리는 문장",
+        "관점 전환": "반면, 한편처럼 흐름이 바뀌는 문장",
+        "근거 제시": "수치나 사례로 주장을 받치는 문장",
+        "갈등 쟁점": "대립이나 충돌을 크게 보이게 하는 문장",
+        "책임 쟁점": "책임 소재를 읽게 하는 문장",
+        "피해 관점": "손실이나 피해를 앞세우는 문장",
+        "출처 흐림": "판단 주체가 흐려지는 문장",
+    }
+    fragments = [mapping[label] for label in ordered[:3] if label in mapping]
+    if not fragments:
+        return "표시된 문장은 기사 방향을 크게 정하는 부분입니다. 초반 핵심 서술, 근거 제시, 관점 전환 문장을 중심으로 비교해 보세요."
+
+    return f"표시된 문장은 기사 방향을 크게 정하는 부분입니다. 특히 {' / '.join(fragments)}을 중심으로 읽어보면 도움이 됩니다."
+
+
+def _compact_sentence(text: str) -> str:
+    """Compact a sentence for tolerant matching between LLM output and article text."""
+    normalized = html.unescape(text or "")
+    normalized = normalized.replace("“", '"').replace("”", '"').replace("’", "'").replace("‘", "'")
+    normalized = re.sub(r"\s+", "", normalized)
+    normalized = re.sub(r"[\"'`·….,!?;:()\[\]{}<>]", "", normalized)
+    return normalized
+
+
+def _match_llm_highlights(
+    sentences: list[str], reading_highlights: list[dict]
+) -> dict[int, tuple[str, str]]:
+    """Match LLM-selected highlight sentences back to preview sentences."""
+    if not sentences or not isinstance(reading_highlights, list):
+        return {}
+
+    compact_sentences = [_compact_sentence(sentence) for sentence in sentences]
+    used_indices: set[int] = set()
+    matched: dict[int, tuple[str, str]] = {}
+
+    for item in reading_highlights:
+        if not isinstance(item, dict):
+            continue
+
+        target_sentence = str(item.get("sentence", "")).strip()
+        role = str(item.get("role", "")).strip()
+        note = str(item.get("note", "")).strip()
+        compact_target = _compact_sentence(target_sentence)
+
+        if not compact_target or not role or not note:
+            continue
+
+        best_index: int | None = None
+        best_score = 0.0
+        for index, compact_sentence in enumerate(compact_sentences):
+            if index in used_indices or not compact_sentence:
+                continue
+
+            if compact_sentence == compact_target:
+                best_index = index
+                best_score = 1.0
+                break
+
+            if compact_target in compact_sentence or compact_sentence in compact_target:
+                score = min(len(compact_target), len(compact_sentence)) / max(
+                    len(compact_target), len(compact_sentence)
+                )
+            else:
+                score = difflib.SequenceMatcher(None, compact_target, compact_sentence).ratio()
+
+            if score > best_score:
+                best_score = score
+                best_index = index
+
+        if best_index is None or best_score < HIGHLIGHT_MATCH_THRESHOLD:
+            continue
+
+        matched[best_index] = (role, note)
+        used_indices.add(best_index)
+
+    return matched
+
+
+def _sentence_tooltip(sentence: str, sentence_index: int = 0) -> tuple[str, str] | None:
+    """Generate a label and a short hover explanation for one sentence."""
+    quote_match = re.search(r"[\"“][^\"”]{2,120}[\"”]", sentence)
+    attribution_match = re.search(
+        r"밝혔(?:다|습니다)?|설명했(?:다|습니다)?|말했(?:다|습니다)?|주장했(?:다|습니다)?|전했다|강조했(?:다|습니다)?|사과했(?:다|습니다)?|촉구했(?:다|습니다)?",
+        sentence,
+    )
+    vague_match = re.search(r"지적된다|우려된다", sentence)
+    contrast_match = re.search(r"반면|하지만|그러나|다만|한편", sentence)
+    key_action_match = KEY_ACTION_PATTERN.search(sentence)
+    caution_term = _find_caution_term(sentence)
+
+    if quote_match and attribution_match:
+        quote = quote_match.group(0)
+        clipped = quote if len(quote) <= 20 else f"{quote[:18]}…"
+        return (
+            "직접 발화",
+            f"{clipped}처럼 발화가 그대로 실려 있습니다. 누가 오래 말하고, 반대 주체의 발언도 같은 밀도로 실리는지 비교해 보세요.",
+        )
+
+    if caution_term:
+        pivot = caution_term
+        label = "주의 표현"
+        message = f"'{pivot}' 같은 표현이 사건을 특정 문제로 읽게 만듭니다. 이 단어가 사실 설명인지 평가인지 구분해서 보세요."
+        for group_label, terms in CAUTION_GROUPS.items():
+            if pivot in terms:
+                label = group_label
+                break
+        if label == "갈등 쟁점":
+            message = f"'{pivot}'처럼 대립을 크게 보이게 하는 단어가 들어 있습니다. 실제 쟁점 설명보다 충돌 장면이 앞서는지 함께 보세요."
+        elif label == "책임 쟁점":
+            message = f"'{pivot}'처럼 책임 소재를 읽게 하는 표현입니다. 누구의 책임이 구체적으로 설명되는지, 빠진 주체는 없는지 확인해 보세요."
+        elif label == "피해 관점":
+            message = f"'{pivot}'처럼 손실이나 피해를 떠올리게 하는 단어가 쓰였습니다. 피해 주체가 누구인지, 반대 효과는 다뤄지는지 같이 보세요."
+        return (label, message)
+
+    if attribution_match:
+        verb = attribution_match.group(0)
+        return (
+            "주장 전달",
+            f"'{verb}'처럼 누군가의 설명을 전달하는 문장입니다. 같은 사안에서 다른 주체의 설명도 비슷한 비중으로 실리는지 비교해 보세요.",
+        )
+
+    if contrast_match:
+        marker = contrast_match.group(0)
+        return (
+            "관점 전환",
+            f"'{marker}' 이후에 논점이 바뀌는 문장입니다. 앞문장과 무엇이 달라지는지 보면 기사 안의 우선순위 이동이 잘 보입니다.",
+        )
+
+    if key_action_match:
+        pivot = key_action_match.group(0)
+        return (
+            "핵심 주장",
+            f"'{pivot}'처럼 기사 핵심 조치나 입장 변화가 드러나는 문장입니다. 독자가 이 사안을 어떤 문제로 읽게 만드는지 기준점이 되는 문장으로 보세요.",
+        )
+
+    metric_match = _find_significant_metric(sentence)
+    if metric_match:
+        metric = sentence[metric_match.start() : metric_match.end()].strip()
+        return (
+            "근거 제시",
+            f"'{metric}'처럼 통계나 규모가 주장을 떠받치는 근거로 놓였습니다. 이 수치의 출처와 비교 기준이 함께 설명되는지 확인해 보세요.",
+        )
+
+    if vague_match:
+        return (
+            "출처 흐림",
+            "판단의 출처가 직접 드러나지 않는 배경 설명 문장입니다. 누가 그렇게 보거나 우려하는지 다른 문장에서 확인해 보세요.",
+        )
+
+    if sentence_index < 2 and len(sentence) >= 28:
+        return (
+            "핵심 서술",
+            "기사 초반에 배치된 문장입니다. 이 문장이 독자가 사건을 처음 어떤 구도로 받아들이는지 결정하는 경우가 많습니다.",
+        )
+
+    return None
+
+
+def _highlight_sentence(sentence: str) -> str:
+    """Wrap notable expressions inside a sentence with styled spans."""
+    matches: list[tuple[int, int, str]] = []
+    priority = {"quote": 0, "caution": 1, "metric": 2, "attribution": 3}
+
+    for tone, pattern in HIGHLIGHT_RULES:
+        iterator = _iter_significant_metric_matches(sentence) if tone == "metric" else pattern.finditer(sentence)
+        for match in iterator:
+            matches.append((match.start(), match.end(), tone))
+
+    matches.sort(key=lambda item: (item[0], priority[item[2]], -(item[1] - item[0])))
+
+    filtered: list[tuple[int, int, str]] = []
+    cursor = 0
+    for start, end, tone in matches:
+        if start < cursor:
+            continue
+        filtered.append((start, end, tone))
+        cursor = end
+
+    chunks: list[str] = []
+    last = 0
+    for start, end, tone in filtered:
+        chunks.append(html.escape(sentence[last:start]))
+        chunk = html.escape(sentence[start:end])
+        chunks.append(f"<span class='ns-mark ns-mark-{tone}'>{chunk}</span>")
+        last = end
+    chunks.append(html.escape(sentence[last:]))
+    return "".join(chunks)
+
+
+def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
+    """Build annotated body preview HTML with hover explanations."""
+    sentences = _split_sentences(body)
+    if not sentences:
+        return "<div class='ns-body-empty'>본문 정보가 없습니다.</div>"
+
+    annotated_sentences = sentences[:ANNOTATED_SENTENCE_LIMIT]
+    remaining_sentences = sentences[ANNOTATED_SENTENCE_LIMIT:]
+    reading_highlights = []
+    reading_focus = ""
+    if isinstance(analysis, dict):
+        raw_highlights = analysis.get("reading_highlights", [])
+        if isinstance(raw_highlights, list):
+            reading_highlights = raw_highlights
+        reading_focus = str(analysis.get("reading_focus", "")).strip()
+
+    llm_highlight_map = _match_llm_highlights(annotated_sentences, reading_highlights)
+    use_llm_highlights = bool(llm_highlight_map)
+
+    assigned_tips: list[tuple[str, str] | None] = []
+    for index, sentence in enumerate(annotated_sentences):
+        if use_llm_highlights:
+            assigned_tips.append(llm_highlight_map.get(index))
+        else:
+            assigned_tips.append(_sentence_tooltip(sentence, sentence_index=index))
+
+    if annotated_sentences and not any(assigned_tips):
+        fallback_index = 0
+        for index, sentence in enumerate(annotated_sentences):
+            if len(sentence.strip()) >= 18:
+                fallback_index = index
+                break
+        assigned_tips[fallback_index] = (
+            "핵심 서술",
+            "이 문장을 기준점으로 두고 기사가 사건을 처음 어떤 방향으로 읽게 만드는지 확인해 보세요.",
+        )
+
+    sentence_html = []
+    active_labels: list[str] = []
+    for sentence, tip in zip(annotated_sentences, assigned_tips):
+        if tip is None:
+            sentence_html.append(html.escape(sentence))
+            continue
+
+        tip_label, tooltip = tip
+        active_labels.append(tip_label)
+        sentence_html.append(
+            "<span class='ns-annotated-sentence' "
+            f"data-tip-label='{html.escape(tip_label, quote=True)}' "
+            f"data-tip='{html.escape(tooltip, quote=True)}'>"
+            f"{_highlight_sentence(sentence)}</span>"
+        )
+
+    body_html = " ".join(sentence_html)
+    focus_note = _build_body_focus_note(active_labels, custom_focus=reading_focus if use_llm_highlights else "")
+    rest_html = ""
+    if remaining_sentences:
+        rest_text = " ".join(remaining_sentences).strip()
+        if len(rest_text) > BODY_REST_CHAR_LIMIT:
+            rest_text = f"{rest_text[:BODY_REST_CHAR_LIMIT].rstrip()}..."
+        rest_html = f"""
+          <div class="ns-body-rest">
+            <div class="ns-mini-label">이후 본문 미리보기</div>
+            <p class="ns-body-rest-copy">{html.escape(rest_text)}</p>
+          </div>
+        """
+
+    return f"""
+        <div class="ns-body-panel">
+          <div class="ns-body-topline">
+            <div class="ns-panel-kicker">문장별 읽기 보조</div>
+            <div class="ns-panel-note">표시된 문장에 커서를 올리면 이 문장이 기사 안에서 어떤 역할을 하는지 짧은 메모가 나타납니다.</div>
+          </div>
+          <div class="ns-body-focus-note">{html.escape(focus_note)}</div>
+          <div class="ns-body-legend">
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-caution">핵심 주장</span> 기사의 주요 결론이나 입장을 드러내는 문장</span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-metric">근거 제시</span> 수치, 사례, 인용으로 주장을 뒷받침하는 문장</span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-quote">관점 전환</span> 앞뒤 문장과 다른 시각이나 반론을 제시하는 문장</span>
+          </div>
+          <div class="ns-body-copy">{body_html}</div>
+          {rest_html}
+        </div>
+    """
+
+
+def _build_position_summary(analysis: dict) -> str:
+    """Create a short one-line reading orientation sentence."""
+    frame = str(analysis.get("frame", "")).strip() or "정보 없음"
+    voice = str(analysis.get("primary_voice", "")).strip() or "정보 없음"
+    tone = str(analysis.get("tone", "")).strip() or "정보 없음"
+    return (
+        f"이 기사는 '{frame}' 프레임을 중심에 두고 '{voice}'의 목소리를 가장 크게 들려주며, "
+        f"전체 어조는 '{tone}'에 가깝습니다."
+    )
+
+
+def _build_comparison_hint(analysis: dict) -> str:
+    """Turn the analysis into a concrete next-step comparison hint."""
+    voice = str(analysis.get("primary_voice", "")).strip() or "현재 기사에서 가장 크게 들리는 주체"
+    frame = str(analysis.get("frame", "")).strip() or "현재 기사 프레임"
+    missing = str(analysis.get("missing_perspective", "")).strip()
+    if missing:
+        return (
+            f"다음 기사에서는 '{voice}' 외에 어떤 주체가 더 길게 인용되는지, "
+            f"같은 사안을 '{frame}' 대신 다른 문제로 읽게 만드는 근거가 있는지 함께 확인해 보세요. "
+            f"{missing}"
+        )
+    return (
+        f"다음 기사에서는 '{voice}' 외에 어떤 주체가 더 길게 인용되는지, "
+        f"같은 사안을 '{frame}' 대신 다른 문제로 읽게 만드는 근거가 있는지 함께 확인해 보세요."
+    )
+
+
+def _serialize_article(article: dict, analysis: dict) -> dict:
+    """Prepare article metadata for the frontend."""
+    return {
+        "title": article.get("title", "제목 없음"),
+        "source": article.get("source", "출처 정보 없음"),
+        "date": article.get("date", "날짜 정보 없음"),
+        "url": article.get("url", ""),
+        "body_preview_html": _render_body_preview_html(article.get("body", ""), analysis),
+        "position_summary": _build_position_summary(analysis),
+    }
+
+
+def _serialize_analysis(analysis: dict) -> dict:
+    """Add UI-friendly derived fields to the analysis payload."""
+    payload = dict(analysis)
+    payload["position_summary"] = _build_position_summary(analysis)
+    payload["comparison_hint"] = _build_comparison_hint(analysis)
+    return payload
+
+
+@app.route("/")
+def index() -> str:
+    """Render the NewSight landing page."""
+    return render_template("index.html")
+
+
+@app.post("/api/analyze")
+def analyze() -> tuple[dict, int] | tuple[object, int]:
+    """Analyze one input URL and return article, analysis, and recommendations."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        url = str(payload.get("url", "")).strip()
+        validation_error = _validate_input_url(url)
+        if validation_error:
+            return jsonify({"message": validation_error, "tone": "caution"}), 400
+
+        article = fetch_article(url)
+        if not _article_payload_is_usable(article):
+            return jsonify({"message": ARTICLE_EXTRACTION_FAILURE_MESSAGE, "tone": "caution"}), 422
+
+        analysis = analyze_article(article)
+        recommendation_result = recommend_articles(article, analysis, limit=3)
+
+        external_candidates: list[dict] = []
+        external_guidance: dict = {}
+        external_message = ""
+        if not recommendation_result.get("articles"):
+            if recommendation_result.get("notice"):
+                external_message = str(recommendation_result.get("notice", "")).strip()
+            external_candidates = search_related_articles(article, analysis, limit=3)
+            if external_candidates:
+                external_guidance = explain_external_candidates(article, analysis, external_candidates)
+            else:
+                external_message = external_message or EXTERNAL_SEARCH_FAILURE_MESSAGE
+
+        if not recommendation_result.get("articles") and not external_candidates:
+            external_message = NO_RECOMMENDATION_MESSAGE
+
+        return (
+            jsonify(
                 {
-                    "title": "야당, 정부 경제정책 강력 비판",
-                    "source": "대안뉴스",
-                    "date": "2024-01-15",
-                    "url": "https://example.com/article2",
-                    "framing": "비판 중심"
-                },
-                {
-                    "title": "중소기업, 새 정책에 '우려' 표명",
-                    "source": "경제일보",
-                    "date": "2024-01-15",
-                    "url": "https://example.com/article3",
-                    "framing": "현장 목소리 중심"
-                },
-                {
-                    "title": "전문가 '실효성 의문...재정 부담 커질 것'",
-                    "source": "분석저널",
-                    "date": "2024-01-15",
-                    "url": "https://example.com/article4",
-                    "framing": "전문가 분석 중심"
+                    "article": _serialize_article(article, analysis),
+                    "analysis": _serialize_analysis(analysis),
+                    "recommendations": recommendation_result,
+                    "external": {
+                        "candidates": external_candidates,
+                        "guidance": external_guidance,
+                        "message": external_message,
+                    },
                 }
-            ]
-        }
-        
-        return jsonify(dummy_response), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            ),
+            200,
+        )
+    except Exception as exc:
+        logger.exception("Unexpected /api/analyze failure: %s", exc)
+        return (
+            jsonify(
+                {
+                    "message": "분석 중 예기치 않은 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                    "tone": "caution",
+                }
+            ),
+            500,
+        )
 
-@app.route('/api/health', methods=['GET'])
-def health():
-    """서버 상태 확인"""
-    return jsonify({"status": "ok", "message": "NewsPrism is running"})
 
-# ============================================
-# 서버 실행
-# ============================================
+@app.get("/api/health")
+def health() -> tuple[object, int]:
+    """Health check endpoint."""
+    return jsonify({"status": "ok", "message": "NewSight is running"}), 200
 
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    debug = os.getenv('FLASK_ENV', 'development') == 'development'
-    app.run(host='0.0.0.0', port=port, debug=debug)
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    debug = os.getenv("FLASK_ENV", "development") == "development"
+    app.run(host="0.0.0.0", port=port, debug=debug)
