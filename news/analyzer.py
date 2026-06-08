@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from prompts import (
     DATASET_TAGGING_SYSTEM_PROMPT,
     EXTERNAL_GUIDANCE_SYSTEM_PROMPT,
+    PERSPECTIVE_VECTOR_KEYS,
     READING_ROLE_CANDIDATES,
     SYSTEM_PROMPT,
     get_analysis_prompt,
@@ -33,6 +34,26 @@ DEFAULT_ANALYSIS = {
     "missing_perspective": "이 기사만 읽으면 놓칠 수 있는 이해관계자나 맥락을 설명합니다.",
     "reading_focus": "기사 초반에 무엇이 핵심 문제로 제시되는지, 그리고 어떤 주체의 말이 가장 길게 실리는지 먼저 살펴보세요.",
     "reading_highlights": [],
+    "bias_axis": 0.0,
+    "bias_strength": 0.0,
+    "emotionality": 0.0,
+    "source_balance": 50.0,
+    "evidence_quality": 50.0,
+    "content_bias": {
+        "favored_side": "",
+        "disfavored_side": "",
+        "axis": 0.0,
+        "strength": 0.0,
+        "reasoning": "",
+    },
+    "background_bias": {
+        "favored_side": "",
+        "disfavored_side": "",
+        "axis": 0.0,
+        "strength": 0.0,
+        "reasoning": "",
+    },
+    "perspective_vector": {key: 0.0 for key in PERSPECTIVE_VECTOR_KEYS},
 }
 
 DEFAULT_EXTERNAL_GUIDANCE_NOTE = (
@@ -90,6 +111,15 @@ def _normalize_issue_tags(value: Any) -> list[str]:
     return DEFAULT_ANALYSIS["issue_tags"][:]
 
 
+def _clamp_float(value: Any, minimum: float, maximum: float, default: float) -> float:
+    """Safely normalize numeric diagnostics into a bounded float."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, number))
+
+
 def _normalize_reading_highlights(value: Any) -> list[dict[str, str]]:
     """Normalize LLM-provided reading highlights into a short list of sentence notes."""
     if not isinstance(value, list):
@@ -119,6 +149,30 @@ def _normalize_reading_highlights(value: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def _normalize_bias_block(value: Any) -> dict[str, Any]:
+    """Normalize content/background bias blocks into a stable shape."""
+    if not isinstance(value, dict):
+        value = {}
+
+    default_block = DEFAULT_ANALYSIS["content_bias"]
+    return {
+        "favored_side": str(value.get("favored_side", "")).strip(),
+        "disfavored_side": str(value.get("disfavored_side", "")).strip(),
+        "axis": _clamp_float(value.get("axis"), -100.0, 100.0, float(default_block["axis"])),
+        "strength": _clamp_float(value.get("strength"), 0.0, 100.0, float(default_block["strength"])),
+        "reasoning": str(value.get("reasoning", "")).strip(),
+    }
+
+
+def _normalize_perspective_vector(value: Any) -> dict[str, float]:
+    """Normalize multi-axis perspective scores."""
+    raw_vector = value if isinstance(value, dict) else {}
+    return {
+        key: _clamp_float(raw_vector.get(key), 0.0, 100.0, 0.0)
+        for key in PERSPECTIVE_VECTOR_KEYS
+    }
+
+
 def _normalize_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     """Merge partial or slightly malformed LLM output into the expected schema."""
     normalized = DEFAULT_ANALYSIS.copy()
@@ -130,11 +184,83 @@ def _normalize_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             normalized[key] = _normalize_issue_tags(payload[key])
         elif key == "reading_highlights":
             normalized[key] = _normalize_reading_highlights(payload[key])
+        elif key in {"bias_axis"}:
+            normalized[key] = _clamp_float(payload[key], -100.0, 100.0, float(DEFAULT_ANALYSIS[key]))
+        elif key in {"bias_strength", "emotionality", "source_balance", "evidence_quality"}:
+            normalized[key] = _clamp_float(payload[key], 0.0, 100.0, float(DEFAULT_ANALYSIS[key]))
+        elif key in {"content_bias", "background_bias"}:
+            normalized[key] = _normalize_bias_block(payload[key])
+        elif key == "perspective_vector":
+            normalized[key] = _normalize_perspective_vector(payload[key])
         else:
             value = payload[key]
             normalized[key] = str(value).strip() if value not in (None, "") else DEFAULT_ANALYSIS[key]
 
     return normalized
+
+
+def _calibrate_supplemental_diagnostics(analysis: dict[str, Any], article: dict) -> dict[str, Any]:
+    """Lightly strengthen supplementary diagnostics when the raw model output is too thin."""
+    title = str(article.get("title", "")).strip()
+    body = str(article.get("body", "")).strip()
+    text = f"{title} {body}"
+    if not text.strip():
+        return analysis
+
+    labor_hits = sum(1 for keyword in ("노조", "노동자", "근로자", "파업", "임금", "단체교섭", "노동권") if keyword in text)
+    business_hits = sum(1 for keyword in ("기업", "경영", "사측", "경영계", "비용", "부담", "생산 차질") if keyword in text)
+    government_hits = sum(1 for keyword in ("정부", "대통령", "장관", "부처", "정책", "제도", "규제") if keyword in text)
+    welfare_hits = sum(1 for keyword in ("지원", "복지", "보호", "공공성", "구제", "안전망") if keyword in text)
+    market_hits = sum(1 for keyword in ("시장", "투자", "성장", "수익", "경쟁력", "수출") if keyword in text)
+    risk_hits = sum(1 for keyword in ("우려", "논란", "갈등", "피해", "충돌", "위기", "부담") if keyword in text)
+    benefit_hits = sum(1 for keyword in ("개선", "확대", "회복", "보호", "강화", "성과") if keyword in text)
+
+    vector = dict(analysis.get("perspective_vector", {}) or {})
+    vector["pro_labor"] = max(vector.get("pro_labor", 0.0), min(100.0, labor_hits * 18.0))
+    vector["pro_business"] = max(vector.get("pro_business", 0.0), min(100.0, business_hits * 18.0))
+    vector["pro_government"] = max(vector.get("pro_government", 0.0), min(100.0, government_hits * 15.0))
+    vector["pro_welfare"] = max(vector.get("pro_welfare", 0.0), min(100.0, welfare_hits * 18.0))
+    vector["pro_market"] = max(vector.get("pro_market", 0.0), min(100.0, market_hits * 16.0))
+    vector["pro_regulation"] = max(vector.get("pro_regulation", 0.0), min(100.0, (government_hits + welfare_hits) * 10.0))
+    vector["anti_regulation"] = max(vector.get("anti_regulation", 0.0), min(100.0, market_hits * 10.0))
+    vector["risk_emphasis"] = max(vector.get("risk_emphasis", 0.0), min(100.0, risk_hits * 14.0))
+    vector["benefit_emphasis"] = max(vector.get("benefit_emphasis", 0.0), min(100.0, benefit_hits * 14.0))
+    analysis["perspective_vector"] = _normalize_perspective_vector(vector)
+
+    if analysis.get("emotionality", 0.0) < 15.0 and risk_hits:
+        analysis["emotionality"] = min(100.0, 20.0 + risk_hits * 8.0)
+    if analysis.get("evidence_quality", 50.0) < 50.0 and any(word in text for word in ("통계", "자료", "조사", "발표", "%", "명", "건", "개")):
+        analysis["evidence_quality"] = 58.0
+
+    if not analysis.get("content_bias", {}).get("favored_side"):
+        if labor_hits > business_hits + 1:
+            analysis["content_bias"] = {
+                "favored_side": "노동·권리 보호 논리",
+                "disfavored_side": "기업·비용 부담 논리",
+                "axis": 32.0,
+                "strength": max(analysis.get("bias_strength", 0.0), 36.0),
+                "reasoning": "기사 내용에서 노동·권리 보호 쪽 어휘와 이해관계자 비중이 상대적으로 더 크게 드러납니다.",
+            }
+        elif business_hits > labor_hits + 1:
+            analysis["content_bias"] = {
+                "favored_side": "기업·비용 부담 논리",
+                "disfavored_side": "노동·권리 보호 논리",
+                "axis": -32.0,
+                "strength": max(analysis.get("bias_strength", 0.0), 36.0),
+                "reasoning": "기사 내용에서 비용 부담, 경영, 생산 차질 같은 논리가 상대적으로 더 앞에 놓입니다.",
+            }
+
+    if not analysis.get("background_bias", {}).get("favored_side"):
+        if government_hits and any(word in text for word in ("개정", "발표", "도입", "추진")):
+            analysis["background_bias"] = {
+                "favored_side": "정책 추진 주체",
+                "disfavored_side": "정책 외 이해관계자",
+                "axis": 14.0 if welfare_hits >= market_hits else -8.0,
+                "strength": 24.0,
+                "reasoning": "이 기사는 정책 발표나 제도 변화 자체를 중심 사건으로 삼아 정책 주체의 문제 설정을 먼저 읽게 만듭니다.",
+            }
+
+    return _normalize_analysis(analysis)
 
 
 def _normalize_dataset_tag(payload: dict[str, Any]) -> dict[str, Any]:
@@ -205,10 +331,30 @@ def _build_mock_analysis(article: dict, notice: str) -> dict[str, Any]:
             "missing_perspective": "다른 이해관계자, 반대 입장, 구조적 배경 맥락을 함께 읽어보라는 안내용 예시 문장입니다.",
             "reading_focus": "이 기사를 읽을 때는 초반 문제 설정 문장과, 수치나 직접 발언이 실제로 얼마나 구체적인지 먼저 확인해 보세요.",
             "reading_highlights": reading_highlights,
+            "bias_axis": 0.0,
+            "bias_strength": 24.0,
+            "emotionality": 18.0,
+            "source_balance": 48.0,
+            "evidence_quality": 42.0,
+            "content_bias": {
+                "favored_side": "",
+                "disfavored_side": "",
+                "axis": 0.0,
+                "strength": 24.0,
+                "reasoning": "실제 LLM 연결 없이 생성된 예시 결과이므로, 편향 진단 값은 참고용 기본치입니다.",
+            },
+            "background_bias": {
+                "favored_side": "",
+                "disfavored_side": "",
+                "axis": 0.0,
+                "strength": 18.0,
+                "reasoning": "실제 LLM 연결 없이 생성된 예시 결과이므로, 배경 편향 진단 값은 참고용 기본치입니다.",
+            },
+            "perspective_vector": {key: 0.0 for key in PERSPECTIVE_VECTOR_KEYS},
             "analysis_notice": notice,
         }
     )
-    return mock_result
+    return _calibrate_supplemental_diagnostics(mock_result, article)
 
 
 def _build_mock_dataset_tag(article: dict, issue: str, notice: str) -> dict[str, Any]:
@@ -492,7 +638,8 @@ def analyze_article(article: dict) -> dict[str, Any]:
 
     try:
         raw_text = _call_llm_text(SYSTEM_PROMPT, get_analysis_prompt(article))
-        return _normalize_analysis(_parse_json_response(raw_text))
+        normalized = _normalize_analysis(_parse_json_response(raw_text))
+        return _calibrate_supplemental_diagnostics(normalized, article)
     except RuntimeError:
         return _build_mock_analysis(
             article,

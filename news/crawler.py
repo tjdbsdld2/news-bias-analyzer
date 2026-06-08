@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -32,6 +33,27 @@ NOISY_BODY_TERMS = {
     "전체메뉴",
     "메뉴 열기",
 }
+DROP_LINE_PATTERNS = [
+    r"^광고$",
+    r"^AD$",
+    r"^본문\s*바로가기$",
+    r"^언론사별\s*바로가기$",
+    r"^말하기\s*속도$",
+    r"^글자\s*크기\s*변경하기$",
+    r"^인쇄하기$",
+    r"^공유하기$",
+    r"^구독$",
+    r"^좋아요$",
+    r"^댓글$",
+    r"무단\s*전재",
+    r"재배포\s*금지",
+    r"저작권자",
+    r"Copyright",
+    r"AI\s*학습\s*및\s*활용\s*금지",
+    r"이 기사에 대해 어떻게 생각하시나요",
+    r"기자\s*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+",
+    r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +61,81 @@ logger = logging.getLogger(__name__)
 def _clean_text(text: str) -> str:
     """Normalize whitespace so the analyzer receives cleaner article text."""
     return " ".join(text.split()).strip()
+
+
+def _normalize_body_text(text: str) -> str:
+    """Preserve sentence structure while removing invisible and repeated whitespace."""
+    normalized = str(text or "")
+    normalized = normalized.replace("\u200b", " ")
+    normalized = normalized.replace("\xa0", " ")
+    normalized = normalized.replace("\ufeff", " ")
+    normalized = re.sub(r"[\t\r\f\v]+", " ", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    normalized = re.sub(r" {2,}", " ", normalized)
+    return normalized.strip()
+
+
+def _remove_inline_noise(text: str) -> str:
+    """Strip reporter email signatures and short inline newsroom footers."""
+    cleaned = re.sub(
+        r"[가-힣]{2,4}\s*(기자|특파원|인턴기자)\s*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+",
+        " ",
+        text,
+    )
+    cleaned = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+", " ", cleaned)
+    cleaned = re.sub(
+        r"\[[^\]]{0,40}(기자|특파원|인턴기자)[^\]]{0,40}\]",
+        " ",
+        cleaned,
+    )
+    return cleaned
+
+
+def _drop_noise_lines(text: str) -> str:
+    """Remove menu-like lines and common article footer boilerplate."""
+    kept_lines: list[str] = []
+    for line in text.splitlines():
+        line = _normalize_body_text(line)
+        if not line:
+            continue
+
+        should_drop = False
+        for pattern in DROP_LINE_PATTERNS:
+            if re.search(pattern, line, flags=re.IGNORECASE):
+                should_drop = True
+                break
+
+        if should_drop:
+            continue
+
+        kept_lines.append(line)
+
+    return "\n".join(kept_lines)
+
+
+def _dedupe_lines(text: str) -> str:
+    """Deduplicate repeated lines that often appear in copied news bodies."""
+    seen: set[str] = set()
+    result: list[str] = []
+
+    for line in text.splitlines():
+        line = _normalize_body_text(line)
+        compact_line = re.sub(r"\s+", "", line)
+        if not compact_line or compact_line in seen:
+            continue
+        seen.add(compact_line)
+        result.append(line)
+
+    return "\n".join(result)
+
+
+def _preprocess_body(text: str) -> str:
+    """Apply low-risk cleanup steps before final body validation."""
+    cleaned = _normalize_body_text(text)
+    cleaned = _remove_inline_noise(cleaned)
+    cleaned = _drop_noise_lines(cleaned)
+    cleaned = _dedupe_lines(cleaned)
+    return _clean_text(cleaned)
 
 
 def _truncate_text(text: str, limit: int = MAX_BODY_LENGTH) -> str:
@@ -126,12 +223,12 @@ def fetch_article(url: str) -> dict | None:
 
         if extracted_json:
             data = json.loads(extracted_json)
-            body = _clean_text(data.get("text", ""))
+            body = _preprocess_body(data.get("text", ""))
             title = _clean_text(data.get("title", ""))
             source = _clean_text(data.get("sitename", "")) or _fallback_source(url)
             date = _clean_text(data.get("date", ""))
         else:
-            body = _clean_text(
+            body = _preprocess_body(
                 trafilatura.extract(
                     downloaded,
                     url=url,

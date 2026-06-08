@@ -56,10 +56,23 @@ READING_ROLE_CANDIDATES = [
     "책임 쟁점",
     "피해 관점",
 ]
+PERSPECTIVE_VECTOR_KEYS = [
+    "pro_government",
+    "anti_government",
+    "pro_business",
+    "pro_labor",
+    "pro_market",
+    "pro_welfare",
+    "pro_regulation",
+    "anti_regulation",
+    "risk_emphasis",
+    "benefit_emphasis",
+]
 
 FRAME_CANDIDATES_BULLETS = "\n".join(f"- {frame}" for frame in FRAME_CANDIDATES)
 FRAME_CANDIDATES_INLINE = ", ".join(FRAME_CANDIDATES)
 READING_ROLE_CANDIDATES_INLINE = ", ".join(READING_ROLE_CANDIDATES)
+PERSPECTIVE_VECTOR_KEYS_INLINE = ", ".join(PERSPECTIVE_VECTOR_KEYS)
 
 
 SYSTEM_PROMPT = f"""
@@ -97,6 +110,9 @@ If none of the candidates fit the article well enough, create one short new fram
 - missing_perspective: what is still hard to know after reading this article alone, and what kind of second article would fix that.
 - reading_focus: one short practical note on what the reader should pay special attention to while reading this article critically.
 - reading_highlights: 3-5 genuinely important sentences from the article body. Choose only sentences that deserve a reading note.
+- content_bias: from the article's own wording, quotation structure, and emphasis, which side is relatively foregrounded or backgrounded.
+- background_bias: from the article's news selection and contextual framing, which side may benefit from this reporting setup itself.
+- perspective_vector: supplementary emphasis scores showing which axes are relatively strong. These are heuristic reading aids, not absolute verdicts.
 - Do not repeat the same sentence across multiple fields. Each field should answer a different reading question.
 
 [Output JSON Schema]
@@ -118,7 +134,38 @@ If none of the candidates fit the article well enough, create one short new fram
       "role": "Choose one of [{READING_ROLE_CANDIDATES_INLINE}]",
       "note": "One practical sentence explaining why this exact sentence matters for critical reading"
     }}
-  ]
+  ],
+  "bias_axis": "Number from -100 to 100. Negative means the article leans more toward business/market/cost-burden logic, positive means it leans more toward labor/welfare/public-interest/protection logic. Use 0 only when neither side is meaningfully foregrounded.",
+  "bias_strength": "Number from 0 to 100 showing how strongly one framing direction dominates",
+  "emotionality": "Number from 0 to 100 showing how emotionally charged, urgent, or conflict-driven the wording feels",
+  "source_balance": "Number from 0 to 100 showing how evenly different stakeholders are represented",
+  "evidence_quality": "Number from 0 to 100 showing how concrete the data, citations, and factual grounding are",
+  "content_bias": {{
+    "favored_side": "Short Korean phrase for the side more foregrounded by the article text itself",
+    "disfavored_side": "Short Korean phrase for the side pushed back or less supported by the article text itself",
+    "axis": "Number from -100 to 100 using the same direction as bias_axis",
+    "strength": "Number from 0 to 100",
+    "reasoning": "1-2 sentences explaining the content-level bias using wording, quotes, or article structure"
+  }},
+  "background_bias": {{
+    "favored_side": "Short Korean phrase for the side that may benefit from the article's news selection or contextual setup",
+    "disfavored_side": "Short Korean phrase for the side less favored by that setup",
+    "axis": "Number from -100 to 100 using the same direction as bias_axis",
+    "strength": "Number from 0 to 100",
+    "reasoning": "1-2 sentences explaining the background-level bias in plain Korean"
+  }},
+  "perspective_vector": {{
+    "pro_government": "0-100",
+    "anti_government": "0-100",
+    "pro_business": "0-100",
+    "pro_labor": "0-100",
+    "pro_market": "0-100",
+    "pro_welfare": "0-100",
+    "pro_regulation": "0-100",
+    "anti_regulation": "0-100",
+    "risk_emphasis": "0-100",
+    "benefit_emphasis": "0-100"
+  }}
 }}
 """
 
@@ -209,7 +256,38 @@ FEW_SHOT_EXAMPLE = """
       "role": "관점 전환",
       "note": "여기서 다른 이해관계자가 등장하지만 설명의 밀도는 앞문장보다 약합니다. 어느 쪽에 더 많은 근거와 목소리가 실리는지 읽어볼 지점입니다."
     }
-  ]
+  ],
+  "bias_axis": 32,
+  "bias_strength": 54,
+  "emotionality": 46,
+  "source_balance": 41,
+  "evidence_quality": 57,
+  "content_bias": {
+    "favored_side": "노동계",
+    "disfavored_side": "소상공인",
+    "axis": 38,
+    "strength": 58,
+    "reasoning": "기사 본문은 노동계 요구의 이유와 직접 발언을 더 길게 싣고, 소상공인 측은 짧게 언급합니다. 독자는 인상 요구의 정당성을 먼저 이해하게 됩니다."
+  },
+  "background_bias": {
+    "favored_side": "노동권 보호 논리",
+    "disfavored_side": "비용 부담 논리",
+    "axis": 24,
+    "strength": 34,
+    "reasoning": "최저임금 협상 국면에서 이 기사를 지금 이 각도로 읽게 하면 노동자 생존권 문제를 먼저 떠올리게 됩니다. 비용 부담 논리는 뒤늦게 보조 맥락으로 따라옵니다."
+  },
+  "perspective_vector": {
+    "pro_government": 18,
+    "anti_government": 12,
+    "pro_business": 26,
+    "pro_labor": 78,
+    "pro_market": 20,
+    "pro_welfare": 64,
+    "pro_regulation": 42,
+    "anti_regulation": 18,
+    "risk_emphasis": 44,
+    "benefit_emphasis": 37
+  }
 }
 """
 
@@ -256,6 +334,8 @@ Return ONLY the JSON object and do not wrap it in ```json fences.
 - For reading_highlights, choose only 3-5 sentences that genuinely deserve a note.
 - Copy the original sentence exactly as it appears in the article body. Do not paraphrase.
 - If a sentence is plain background with no special reading value, do not include it in reading_highlights.
+- Fill the supplementary diagnostic fields too: bias_axis, bias_strength, emotionality, source_balance, evidence_quality, content_bias, background_bias, perspective_vector.
+- These supplementary diagnostics should remain evidence-based and practical, not ideological slogans.
 
 [JSON Response]
 """.strip()
