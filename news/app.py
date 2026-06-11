@@ -94,6 +94,13 @@ NO_RECOMMENDATION_MESSAGE = (
     "현재 로컬 DB와 외부 검색에서 비교할 만한 기사 후보를 찾지 못했습니다. 다른 기사 URL로 다시 시도해 주세요."
 )
 EXTERNAL_SEARCH_FAILURE_MESSAGE = "외부 관련 기사 후보를 찾지 못했습니다."
+EVIDENCE_CUE_PATTERN = re.compile(
+    r"자료|통계|조사|집계|보고서|설문|발표|공시|백서|브리핑|기자회견|질의응답|전망|예상|전했다|밝혔다|설명했다|따르면"
+)
+LIST_LIKE_MARKER_PATTERN = re.compile(
+    r"등이\s*(?:참가|참석|배석|만난다|만날\s*예정)|비롯해|잇달아\s*찾아|주요\s*경영진|참가한다|참석한다"
+)
+DIRECT_QUOTE_PATTERN = re.compile(r"[\"“][^\"”]{2,120}[\"”]")
 
 
 def _validate_input_url(url: str) -> str | None:
@@ -260,10 +267,66 @@ def _match_llm_highlights(
         if best_index is None or best_score < HIGHLIGHT_MATCH_THRESHOLD:
             continue
 
+        matched_sentence = sentences[best_index]
+        if not _is_actionable_llm_highlight(matched_sentence, role, note):
+            continue
+
         matched[best_index] = (role, note)
         used_indices.add(best_index)
 
     return matched
+
+
+def _looks_like_entity_list(sentence: str) -> bool:
+    """Detect list-heavy sentences that rarely deserve standalone hover notes."""
+    separator_count = sentence.count(",") + sentence.count("·") + sentence.count("ㆍ")
+    if separator_count < 2:
+        return False
+
+    if LIST_LIKE_MARKER_PATTERN.search(sentence):
+        return True
+
+    role_word_hits = len(re.findall(r"(회장|사장|대표|의장|부회장|CTO|CEO|경영진)", sentence))
+    return role_word_hits >= 3
+
+
+def _is_actionable_llm_highlight(sentence: str, role: str, note: str) -> bool:
+    """Keep only LLM highlights that feel like real reading aids, not stray lists."""
+    compact = sentence.strip()
+    if len(compact) < 18:
+        return False
+
+    has_quote = bool(DIRECT_QUOTE_PATTERN.search(compact))
+    has_metric = bool(_find_significant_metric(compact))
+    has_caution = bool(_find_caution_term(compact))
+    has_contrast = bool(re.search(r"반면|하지만|그러나|다만|한편", compact))
+    has_key_action = bool(KEY_ACTION_PATTERN.search(compact))
+    has_evidence_cue = bool(EVIDENCE_CUE_PATTERN.search(compact))
+    looks_like_list = _looks_like_entity_list(compact)
+
+    if role == "직접 발화":
+        return has_quote
+
+    if role == "관점 전환":
+        return has_contrast
+
+    if role == "근거 제시":
+        if looks_like_list and not (has_metric or has_quote):
+            return False
+        return has_metric or has_quote or has_evidence_cue
+
+    if role in {"핵심 주장", "핵심 서술"}:
+        if looks_like_list and not (has_key_action or has_caution or has_quote):
+            return False
+        return has_key_action or has_caution or has_quote or has_metric or len(note.strip()) >= 24
+
+    if role in {"갈등 쟁점", "책임 쟁점", "피해 관점", "주의 표현"}:
+        return has_caution
+
+    if role == "주장 전달":
+        return bool(re.search(r"밝혔(?:다|습니다)?|설명했(?:다|습니다)?|말했(?:다|습니다)?|주장했(?:다|습니다)?|전했다|강조했(?:다|습니다)?", compact))
+
+    return not looks_like_list
 
 
 def _sentence_tooltip(sentence: str, sentence_index: int = 0) -> tuple[str, str] | None:
@@ -377,6 +440,24 @@ def _highlight_sentence(sentence: str) -> str:
     return "".join(chunks)
 
 
+def _sentence_note_class(label: str) -> str:
+    """Map tooltip labels to stable CSS classes for annotated sentences."""
+    mapping = {
+        "핵심 주장": "note-core",
+        "핵심 서술": "note-core",
+        "근거 제시": "note-evidence",
+        "관점 전환": "note-shift",
+        "직접 발화": "note-quote",
+        "주장 전달": "note-claim",
+        "갈등 쟁점": "note-conflict",
+        "책임 쟁점": "note-responsibility",
+        "피해 관점": "note-harm",
+        "주의 표현": "note-caution",
+        "출처 흐림": "note-blur",
+    }
+    return mapping.get(label, "note-generic")
+
+
 def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
     """Build annotated body preview HTML with hover explanations."""
     sentences = _split_sentences(body)
@@ -398,10 +479,9 @@ def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
 
     assigned_tips: list[tuple[str, str] | None] = []
     for index, sentence in enumerate(annotated_sentences):
-        if use_llm_highlights:
-            assigned_tips.append(llm_highlight_map.get(index))
-        else:
-            assigned_tips.append(_sentence_tooltip(sentence, sentence_index=index))
+        llm_tip = llm_highlight_map.get(index)
+        rule_tip = _sentence_tooltip(sentence, sentence_index=index)
+        assigned_tips.append(llm_tip or rule_tip)
 
     if annotated_sentences and not any(assigned_tips):
         fallback_index = 0
@@ -423,8 +503,9 @@ def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
 
         tip_label, tooltip = tip
         active_labels.append(tip_label)
+        label_class = _sentence_note_class(tip_label)
         sentence_html.append(
-            "<span class='ns-annotated-sentence' "
+            f"<span class='ns-annotated-sentence {label_class}' "
             f"data-tip-label='{html.escape(tip_label, quote=True)}' "
             f"data-tip='{html.escape(tooltip, quote=True)}'>"
             f"{_highlight_sentence(sentence)}</span>"
@@ -450,6 +531,7 @@ def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
             <div class="ns-panel-kicker">문장별 읽기 보조</div>
             <div class="ns-panel-note">표시된 문장에 커서를 올리면 이 문장이 기사 안에서 어떤 역할을 하는지 짧은 메모가 나타납니다.</div>
           </div>
+          <div class="ns-inline-note">본문 미리보기는 추출된 원문을 바탕으로 표시하고, 강조 메모만 AI가 덧붙입니다.</div>
           <div class="ns-body-focus-note">{html.escape(focus_note)}</div>
           <div class="ns-body-legend">
             <span class="ns-legend-item"><span class="ns-mark ns-mark-caution">핵심 주장</span> 기사의 주요 결론이나 입장을 드러내는 문장</span>
@@ -468,7 +550,7 @@ def _build_position_summary(analysis: dict) -> str:
     voice = str(analysis.get("primary_voice", "")).strip() or "정보 없음"
     tone = str(analysis.get("tone", "")).strip() or "정보 없음"
     return (
-        f"이 기사는 '{frame}' 프레임을 중심에 두고 '{voice}'의 목소리를 가장 크게 들려주며, "
+        f"이 기사는 '{frame}' 프레임으로 사건을 정리하고 '{voice}'의 설명과 발화를 중심 근거로 배치하며, "
         f"전체 어조는 '{tone}'에 가깝습니다."
     )
 
@@ -477,16 +559,10 @@ def _build_comparison_hint(analysis: dict) -> str:
     """Turn the analysis into a concrete next-step comparison hint."""
     voice = str(analysis.get("primary_voice", "")).strip() or "현재 기사에서 가장 크게 들리는 주체"
     frame = str(analysis.get("frame", "")).strip() or "현재 기사 프레임"
-    missing = str(analysis.get("missing_perspective", "")).strip()
-    if missing:
-        return (
-            f"다음 기사에서는 '{voice}' 외에 어떤 주체가 더 길게 인용되는지, "
-            f"같은 사안을 '{frame}' 대신 다른 문제로 읽게 만드는 근거가 있는지 함께 확인해 보세요. "
-            f"{missing}"
-        )
     return (
-        f"다음 기사에서는 '{voice}' 외에 어떤 주체가 더 길게 인용되는지, "
-        f"같은 사안을 '{frame}' 대신 다른 문제로 읽게 만드는 근거가 있는지 함께 확인해 보세요."
+        f"다음 기사에서는 '{voice}' 대신 누구의 설명과 인용이 중심 근거가 되는지, "
+        f"같은 사안을 '{frame}'보다 어떤 쟁점으로 먼저 읽게 만드는지 함께 확인해 보세요. "
+        "특히 빠져 있던 이해관계자나 배경 근거가 실제로 보완되는지 비교하면 도움이 됩니다."
     )
 
 

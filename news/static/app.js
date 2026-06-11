@@ -15,6 +15,18 @@ const loadingLabel = analyzeBtn.querySelector(".btn-loading");
 let sentencePopover = null;
 let activeSentence = null;
 
+function setActiveSentence(nextSentence) {
+    if (activeSentence && activeSentence !== nextSentence) {
+        activeSentence.classList.remove("is-active");
+    }
+
+    activeSentence = nextSentence || null;
+
+    if (activeSentence) {
+        activeSentence.classList.add("is-active");
+    }
+}
+
 function ensureSentencePopover() {
     if (sentencePopover) {
         return sentencePopover;
@@ -63,6 +75,23 @@ function renderTagRow(tags = [], tone = "accent") {
                 .join("")}
         </div>
     `;
+}
+
+function getAnalysisModeMeta(analysis = {}) {
+    const notice = String(analysis.analysis_notice || "").trim();
+    if (notice) {
+        return {
+            label: "개발용 대체 분석",
+            toneClass: "fallback",
+            description: notice,
+        };
+    }
+
+    return {
+        label: "실시간 분석",
+        toneClass: "live",
+        description: "현재 LLM 응답을 바탕으로 생성된 분석 결과입니다.",
+    };
 }
 
 function setLoading(isLoading) {
@@ -128,7 +157,7 @@ function hideSentencePopover() {
     }
     sentencePopover.classList.add("hidden");
     sentencePopover.classList.remove("is-clickable");
-    activeSentence = null;
+    setActiveSentence(null);
 }
 
 function positionSentencePopover(target, event = null) {
@@ -175,7 +204,7 @@ function showSentencePopover(target, event = null, clickable = false) {
 
     popover.classList.remove("hidden");
     popover.classList.toggle("is-clickable", clickable);
-    activeSentence = target;
+    setActiveSentence(target);
     positionSentencePopover(target, event);
 }
 
@@ -213,6 +242,8 @@ function initSentencePopover() {
 }
 
 function renderArticle(article, analysis) {
+    const analysisMode = getAnalysisModeMeta(analysis);
+
     articlePanel.innerHTML = `
         <div class="ns-panel-kicker">입력 기사 요약</div>
         <h2 class="ns-article-title">${escapeHtml(article.title)}</h2>
@@ -227,6 +258,11 @@ function renderArticle(article, analysis) {
         <div class="ns-summary-box">
             <div class="ns-mini-label">핵심 요약</div>
             <p>${escapeHtml(analysis.summary)}</p>
+        </div>
+
+        <div class="ns-analysis-mode ${escapeHtml(analysisMode.toneClass)}">
+            <div class="ns-analysis-mode-label">${escapeHtml(analysisMode.label)}</div>
+            <p>${escapeHtml(analysisMode.description)}</p>
         </div>
 
         <div class="ns-kpi-grid">
@@ -261,15 +297,15 @@ function renderArticle(article, analysis) {
 function renderOverview(analysis) {
     const cards = [
         {
-            label: "이 기사만 읽으면 무엇이 가장 중요해 보이나",
+            title: "이 기사에서 가장 먼저 커지는 쟁점",
             body: analysis.framing_analysis,
         },
         {
-            label: "앞으로 들리는 목소리와 뒤로 밀리는 목소리",
+            title: "누구의 말이 중심 근거로 들리나",
             body: analysis.citation_analysis,
         },
         {
-            label: "추천 기사에서 꼭 확인할 비교 질문",
+            title: "이 기사만으로는 아직 무엇이 부족한가",
             body: analysis.missing_perspective,
         },
     ];
@@ -278,8 +314,8 @@ function renderOverview(analysis) {
         .map(
             (card) => `
                 <article class="ns-overview-card">
-                    <div class="ns-overview-label">${escapeHtml(card.label)}</div>
-                    <p>${escapeHtml(card.body || "분석 결과가 없습니다.")}</p>
+                    <div class="ns-card-title">${escapeHtml(card.title)}</div>
+                    <p class="ns-card-copy">${escapeHtml(card.body || "분석 결과가 없습니다.")}</p>
                 </article>
             `
         )
@@ -294,11 +330,11 @@ function renderAnalysisCards(analysis) {
             tone: analysis.tone,
         },
         {
-            title: "제목과 본문 관계",
+            title: "제목이 먼저 밀어 올리는 쟁점",
             body: analysis.title_body_gap,
         },
         {
-            title: "추천 기사에서 확인할 차이",
+            title: "다음 기사에서 비교할 포인트",
             body: analysis.comparison_hint,
         },
     ];
@@ -309,7 +345,7 @@ function renderAnalysisCards(analysis) {
                 <article class="ns-analysis-card">
                     <div class="ns-card-title">${escapeHtml(card.title)}</div>
                     ${card.tone ? `<div class="ns-tone-pill">어조 · ${escapeHtml(card.tone)}</div>` : ""}
-                    <p>${escapeHtml(card.body || "분석 결과가 없습니다.")}</p>
+                    <p class="ns-card-copy">${escapeHtml(card.body || "분석 결과가 없습니다.")}</p>
                 </article>
             `
         )
@@ -473,7 +509,9 @@ async function analyzeArticle(url) {
         renderAnalysisCards(analysis);
         renderRecommendationSection(recommendations, external);
 
-        const baseStatus = "분석이 완료되었습니다. 아래에서 기사 요약, 관점 분석, 비교 추천을 순서대로 확인할 수 있습니다.";
+        const baseStatus = analysis.analysis_notice
+            ? "분석은 완료되었지만 현재는 개발용 대체 분석을 표시하고 있습니다."
+            : "실시간 분석이 완료되었습니다. 아래에서 기사 요약, 관점 분석, 비교 추천을 순서대로 확인할 수 있습니다.";
         setStatus(analysis.analysis_notice ? `${baseStatus} ${analysis.analysis_notice}` : baseStatus);
 
         resultsSection.classList.remove("hidden");

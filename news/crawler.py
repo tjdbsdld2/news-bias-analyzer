@@ -53,6 +53,7 @@ DROP_LINE_PATTERNS = [
     r"이 기사에 대해 어떻게 생각하시나요",
     r"기자\s*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+",
     r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+",
+    r"^이 기사는 언론사에서 .* 섹션으로 분류했습니다\.?$",
 ]
 
 logger = logging.getLogger(__name__)
@@ -129,13 +130,27 @@ def _dedupe_lines(text: str) -> str:
     return "\n".join(result)
 
 
-def _preprocess_body(text: str) -> str:
+def _strip_title_prefix(text: str, title: str) -> str:
+    """Remove a duplicated headline when the extractor places it at the start of the body."""
+    body = _normalize_body_text(text)
+    clean_title = _normalize_body_text(title)
+    if not body or not clean_title:
+        return body
+
+    if body.startswith(clean_title):
+        return body[len(clean_title) :].lstrip(" \n\r\t-:|/·")
+    return body
+
+
+def _preprocess_body(text: str, title: str = "") -> str:
     """Apply low-risk cleanup steps before final body validation."""
-    cleaned = _normalize_body_text(text)
+    cleaned = _strip_title_prefix(text, title)
     cleaned = _remove_inline_noise(cleaned)
     cleaned = _drop_noise_lines(cleaned)
     cleaned = _dedupe_lines(cleaned)
-    return _clean_text(cleaned)
+    cleaned = _normalize_body_text(cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def _truncate_text(text: str, limit: int = MAX_BODY_LENGTH) -> str:
@@ -223,11 +238,12 @@ def fetch_article(url: str) -> dict | None:
 
         if extracted_json:
             data = json.loads(extracted_json)
-            body = _preprocess_body(data.get("text", ""))
             title = _clean_text(data.get("title", ""))
+            body = _preprocess_body(data.get("text", ""), title=title)
             source = _clean_text(data.get("sitename", "")) or _fallback_source(url)
             date = _clean_text(data.get("date", ""))
         else:
+            title = ""
             body = _preprocess_body(
                 trafilatura.extract(
                     downloaded,
@@ -236,9 +252,9 @@ def fetch_article(url: str) -> dict | None:
                     include_tables=False,
                     favor_recall=True,
                 )
-                or ""
+                or "",
+                title=title,
             )
-            title = ""
             source = _fallback_source(url)
             date = ""
     except Exception as exc:

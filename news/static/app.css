@@ -366,6 +366,52 @@ a {
     border: 1px solid rgba(139, 46, 34, 0.08);
 }
 
+.ns-analysis-mode {
+    margin-top: 0.9rem;
+    padding: 0.9rem 1rem;
+    border-radius: 18px;
+    border: 1px solid rgba(29, 36, 48, 0.08);
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.ns-analysis-mode.live {
+    background: rgba(32, 69, 94, 0.05);
+    border-color: rgba(32, 69, 94, 0.10);
+}
+
+.ns-analysis-mode.fallback {
+    background: rgba(139, 46, 34, 0.06);
+    border-color: rgba(139, 46, 34, 0.12);
+}
+
+.ns-analysis-mode-label {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.32rem 0.72rem;
+    border-radius: 999px;
+    margin-bottom: 0.45rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.ns-analysis-mode.live .ns-analysis-mode-label {
+    background: rgba(32, 69, 94, 0.10);
+    color: var(--ns-secondary);
+}
+
+.ns-analysis-mode.fallback .ns-analysis-mode-label {
+    background: rgba(139, 46, 34, 0.11);
+    color: var(--ns-accent);
+}
+
+.ns-analysis-mode p {
+    margin: 0;
+    color: var(--ns-ink);
+    font-size: 0.93rem;
+    line-height: 1.75;
+}
+
 .ns-summary-box p,
 .ns-position-strip p,
 .ns-analysis-card p,
@@ -523,14 +569,108 @@ a {
 }
 
 .ns-annotated-sentence {
+    --note-bg: rgba(32, 69, 94, 0.035);
+    --note-bg-hover: rgba(32, 69, 94, 0.07);
+    --note-bg-active: rgba(32, 69, 94, 0.11);
+    --note-line: rgba(32, 69, 94, 0.36);
+    --note-line-hover: rgba(32, 69, 94, 0.56);
+    --note-line-active: rgba(32, 69, 94, 0.72);
+    --note-shadow-active: rgba(32, 69, 94, 0.14);
     position: relative;
-    cursor: help;
-    border-radius: 8px;
-    transition: background 0.18s ease;
+    display: inline;
+    padding: 0 0.08rem;
+    margin: 0 -0.02rem;
+    cursor: pointer;
+    border-radius: 0.42rem;
+    background: var(--note-bg);
+    text-decoration-line: underline;
+    text-decoration-style: dashed;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+    text-decoration-color: var(--note-line);
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    transition:
+        background-color 0.18s ease,
+        text-decoration-color 0.18s ease,
+        box-shadow 0.18s ease,
+        color 0.18s ease;
 }
 
 .ns-annotated-sentence:hover {
-    background: rgba(32, 69, 94, 0.06);
+    background: var(--note-bg-hover);
+    text-decoration-color: var(--note-line-hover);
+}
+
+.ns-annotated-sentence.is-active {
+    background: var(--note-bg-active);
+    text-decoration-color: var(--note-line-active);
+    box-shadow: inset 0 0 0 1px var(--note-shadow-active);
+}
+
+.ns-annotated-sentence.note-core {
+    --note-bg: rgba(139, 46, 34, 0.045);
+    --note-bg-hover: rgba(139, 46, 34, 0.085);
+    --note-bg-active: rgba(139, 46, 34, 0.12);
+    --note-line: rgba(139, 46, 34, 0.46);
+    --note-line-hover: rgba(139, 46, 34, 0.62);
+    --note-line-active: rgba(139, 46, 34, 0.78);
+    --note-shadow-active: rgba(139, 46, 34, 0.15);
+}
+
+.ns-annotated-sentence.note-evidence {
+    --note-bg: rgba(32, 69, 94, 0.04);
+    --note-bg-hover: rgba(32, 69, 94, 0.08);
+    --note-bg-active: rgba(32, 69, 94, 0.125);
+    --note-line: rgba(32, 69, 94, 0.48);
+    --note-line-hover: rgba(32, 69, 94, 0.66);
+    --note-line-active: rgba(32, 69, 94, 0.82);
+    --note-shadow-active: rgba(32, 69, 94, 0.16);
+}
+
+.ns-annotated-sentence.note-shift,
+.ns-annotated-sentence.note-quote {
+    --note-bg: rgba(95, 101, 115, 0.04);
+    --note-bg-hover: rgba(95, 101, 115, 0.075);
+    --note-bg-active: rgba(95, 101, 115, 0.12);
+    --note-line: rgba(95, 101, 115, 0.48);
+    --note-line-hover: rgba(95, 101, 115, 0.66);
+    --note-line-active: rgba(95, 101, 115, 0.8);
+    --note-shadow-active: rgba(95, 101, 115, 0.16);
+}
+
+.ns-annotated-sentence.note-claim,
+.ns-annotated-sentence.note-blur {
+    --note-bg: rgba(84, 95, 111, 0.035);
+    --note-bg-hover: rgba(84, 95, 111, 0.07);
+    --note-bg-active: rgba(84, 95, 111, 0.11);
+    --note-line: rgba(84, 95, 111, 0.44);
+    --note-line-hover: rgba(84, 95, 111, 0.6);
+    --note-line-active: rgba(84, 95, 111, 0.76);
+    --note-shadow-active: rgba(84, 95, 111, 0.15);
+}
+
+.ns-annotated-sentence.note-conflict,
+.ns-annotated-sentence.note-responsibility,
+.ns-annotated-sentence.note-harm,
+.ns-annotated-sentence.note-caution {
+    --note-bg: rgba(161, 56, 40, 0.05);
+    --note-bg-hover: rgba(161, 56, 40, 0.095);
+    --note-bg-active: rgba(161, 56, 40, 0.14);
+    --note-line: rgba(161, 56, 40, 0.54);
+    --note-line-hover: rgba(161, 56, 40, 0.7);
+    --note-line-active: rgba(161, 56, 40, 0.84);
+    --note-shadow-active: rgba(161, 56, 40, 0.17);
+}
+
+.ns-annotated-sentence.note-generic {
+    --note-bg: rgba(44, 76, 104, 0.035);
+    --note-bg-hover: rgba(44, 76, 104, 0.07);
+    --note-bg-active: rgba(44, 76, 104, 0.11);
+    --note-line: rgba(44, 76, 104, 0.4);
+    --note-line-hover: rgba(44, 76, 104, 0.58);
+    --note-line-active: rgba(44, 76, 104, 0.74);
+    --note-shadow-active: rgba(44, 76, 104, 0.15);
 }
 
 .ns-sentence-popover {
@@ -642,10 +782,29 @@ a {
     box-shadow: var(--ns-shadow);
 }
 
-.ns-overview-label {
-    color: var(--ns-accent);
-    font-size: 0.78rem;
-    margin-bottom: 0.45rem;
+.ns-overview-card,
+.ns-analysis-card {
+    color: var(--ns-ink);
+    font-family: "IBM Plex Sans KR", "Noto Sans KR", sans-serif;
+}
+
+.ns-card-title {
+    margin: 0 0 0.6rem;
+    color: #172230;
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.5;
+    letter-spacing: -0.01em;
+    font-family: "IBM Plex Sans KR", "Noto Sans KR", sans-serif;
+}
+
+.ns-card-copy,
+.ns-analysis-card p,
+.ns-overview-card p {
+    color: var(--ns-ink);
+    font-size: 0.97rem;
+    line-height: 1.8;
+    font-family: "IBM Plex Sans KR", "Noto Sans KR", sans-serif;
 }
 
 .ns-analysis-card .ns-tone-pill,
@@ -662,7 +821,7 @@ a {
 }
 
 .ns-tone-pill {
-    margin-bottom: 0.7rem;
+    margin-bottom: 0.72rem;
     background: rgba(139, 46, 34, 0.08);
     color: var(--ns-accent);
 }

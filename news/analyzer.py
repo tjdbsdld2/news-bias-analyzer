@@ -34,6 +34,7 @@ DEFAULT_ANALYSIS = {
     "missing_perspective": "이 기사만 읽으면 놓칠 수 있는 이해관계자나 맥락을 설명합니다.",
     "reading_focus": "기사 초반에 무엇이 핵심 문제로 제시되는지, 그리고 어떤 주체의 말이 가장 길게 실리는지 먼저 살펴보세요.",
     "reading_highlights": [],
+    "analysis_notice": "",
     "bias_axis": 0.0,
     "bias_strength": 0.0,
     "emotionality": 0.0,
@@ -72,7 +73,32 @@ DEFAULT_DATASET_TAG = {
     "memo": "기사에서 관찰 가능한 강조점과 인용 주체를 바탕으로 분류한 mock 태깅 결과입니다.",
 }
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-LLM_TIMEOUT_SECONDS = 25
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
+TITLE_TAG_STOPWORDS = {
+    "기사",
+    "뉴스",
+    "오늘",
+    "내일",
+    "이번",
+    "관련",
+    "예정",
+    "발표",
+    "발표한다",
+    "회의",
+    "논의",
+    "방문",
+    "추진",
+    "예고",
+    "정부",
+}
+
+
+class NoConfiguredProviderError(RuntimeError):
+    """Raised when no supported LLM provider key is configured."""
+
+
+class LLMProviderFailure(RuntimeError):
+    """Raised when all configured LLM providers fail in sequence."""
 
 
 def _strip_code_fences(text: str) -> str:
@@ -283,6 +309,208 @@ def _normalize_dataset_tag(payload: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    """Return whether any of the given keywords appears in the text."""
+    return any(keyword in text for keyword in keywords)
+
+
+def _fallback_title_tags(title: str) -> list[str]:
+    """Extract a few search-friendly tags from the article title when LLM output is unavailable."""
+    tokens = re.findall(r"[A-Za-z0-9가-힣]+", title or "")
+    tags: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        cleaned = token.strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in TITLE_TAG_STOPWORDS:
+            continue
+        if len(cleaned) < 2 and cleaned.upper() not in {"AI", "SK", "LG"}:
+            continue
+        if cleaned.endswith(("한다", "했다", "된다", "예정", "방문")):
+            continue
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        tags.append(cleaned)
+        if len(tags) >= 3:
+            break
+    return tags
+
+
+def _infer_mock_profile(article: dict) -> dict[str, Any]:
+    """Infer safer fallback labels so mock analysis still feels article-aware."""
+    title = str(article.get("title", "")).strip()
+    body = str(article.get("body", "")).strip()
+    text = f"{title} {body}"
+
+    labor_hits = sum(1 for keyword in ("노조", "노동자", "근로자", "파업", "임금", "노동권", "한국노총", "민주노총") if keyword in text)
+    business_hits = sum(1 for keyword in ("기업", "경영", "회장", "ceo", "대표이사", "투자", "협력", "공급망", "산업", "반도체", "엔비디아", "sk하이닉스", "삼성전자") if keyword.lower() in text.lower())
+    platform_hits = sum(1 for keyword in ("배달앱", "플랫폼", "수수료", "상생안", "중개수수료") if keyword in text)
+    retail_hits = sum(1 for keyword in ("대형마트", "새벽배송", "유통산업발전법", "골목상권", "의무휴업") if keyword in text)
+    election_hits = sum(1 for keyword in ("선관위", "투표용지", "지방선거", "개표", "재선거", "선거무효", "참정권") if keyword in text)
+    medical_hits = sum(1 for keyword in ("의료개혁", "의대", "전공의", "의협", "의사", "환자", "지역의료") if keyword in text)
+    housing_hits = sum(1 for keyword in ("전세사기", "보증금", "피해자", "특별법", "주거안정") if keyword in text)
+    support_hits = sum(1 for keyword in ("민생지원금", "소비쿠폰", "추경", "지원금", "소비진작") if keyword in text)
+
+    title_tags = _fallback_title_tags(title)
+    profile = {
+        "frame": DEFAULT_ANALYSIS["frame"],
+        "tone": "설명적",
+        "primary_voice": DEFAULT_ANALYSIS["primary_voice"],
+        "issue_tags": title_tags or DEFAULT_ANALYSIS["issue_tags"][:],
+        "framing_analysis": DEFAULT_ANALYSIS["framing_analysis"],
+        "language_analysis": DEFAULT_ANALYSIS["language_analysis"],
+        "citation_analysis": DEFAULT_ANALYSIS["citation_analysis"],
+        "title_body_gap": DEFAULT_ANALYSIS["title_body_gap"],
+        "missing_perspective": DEFAULT_ANALYSIS["missing_perspective"],
+        "reading_focus": DEFAULT_ANALYSIS["reading_focus"],
+    }
+
+    if business_hits >= 2 and _contains_any(text.lower(), ("엔비디아", "ai", "반도체", "hbm")):
+        profile.update(
+            {
+                "frame": "기업성과_강조",
+                "tone": "설명적",
+                "primary_voice": "엔비디아 및 국내 대기업 경영진",
+                "issue_tags": ["AI", "반도체", "엔비디아"],
+                "framing_analysis": "이 기사는 글로벌 AI 산업 협력과 반도체 공급망 전략을 중심 쟁점으로 앞세웁니다. 기업 간 만남과 협력 일정이 사건의 핵심 의미처럼 배치됩니다.",
+                "language_analysis": "회동 일정, 차세대 제품, 협력 청사진 같은 표현이 기술 협력의 기대감과 산업적 중요성을 키웁니다. 갈등보다는 산업 성과와 기업 동선을 정리하는 설명적 어조가 강합니다.",
+                "citation_analysis": "기업 경영진과 업계 일정이 사실 판단의 중심 근거로 배치됩니다. 시장 평가나 경쟁 리스크를 설명하는 외부 시각은 상대적으로 약합니다.",
+                "title_body_gap": "제목은 SK와의 협력에 집중하지만, 본문은 삼성·LG·현대차·네이버까지 포함한 더 넓은 산업 협력 구도로 확장됩니다.",
+                "missing_perspective": "이 협력이 시장 경쟁, 기술 의존도, 중소 생태계에 어떤 영향을 주는지는 충분히 다뤄지지 않습니다. 공급망 리스크나 산업 경쟁 구도를 중심으로 읽는 다른 기사와 비교해 보면 도움이 됩니다.",
+                "reading_focus": "누가 협력의 핵심 주체로 반복 등장하는지, 일정 소개를 넘어 실제 기술·시장 근거가 얼마나 구체적으로 제시되는지 확인해 보세요.",
+            }
+        )
+        return profile
+
+    if labor_hits and business_hits:
+        if labor_hits > business_hits:
+            frame = "노동권_보호"
+            voice = "노동계"
+            missing = "경영계의 비용 부담 근거나 고용 영향 데이터는 얼마나 구체적으로 제시되는지 비교해 보는 것이 좋습니다."
+        elif business_hits > labor_hits:
+            frame = "기업부담_우려"
+            voice = "기업 및 경영계"
+            missing = "노동자 처우와 권리 보장 논리가 얼마나 직접적으로 제시되는지 비교할 필요가 있습니다."
+        else:
+            frame = "노사갈등_구도"
+            voice = "노동계와 경영계"
+            missing = "노사 양측 외에 현장 노동자, 소상공인, 소비자 등 제3의 이해관계자 관점이 얼마나 비어 있는지 함께 확인해 보세요."
+
+        profile.update(
+            {
+                "frame": frame,
+                "tone": "갈등적",
+                "primary_voice": voice,
+                "issue_tags": ["노동", "임금", "노사"] if not title_tags else title_tags,
+                "framing_analysis": "이 기사는 같은 사안을 노사 간 이해 충돌의 문제로 읽게 만듭니다. 어느 쪽 논리를 더 길게 싣는지가 독자의 초기 판단에 큰 영향을 줍니다.",
+                "language_analysis": "권리, 부담, 위기, 생존 같은 표현이 어느 쪽에 더 강하게 붙는지에 따라 감정 온도가 달라집니다. 제목과 초반 문단에서 갈등 압력이 먼저 세워지는지 보는 것이 중요합니다.",
+                "citation_analysis": "노동계와 경영계 중 누구의 발언이 직접 인용으로 더 길게 제시되는지 확인하는 것이 핵심입니다. 한쪽이 존재만 언급되고 구체 근거가 없으면 체감 균형이 달라질 수 있습니다.",
+                "missing_perspective": missing,
+                "reading_focus": "직접 인용의 길이와 근거 밀도를 비교하면서, 같은 사안을 권리 문제로 읽게 하는지 비용 문제로 읽게 하는지 살펴보세요.",
+            }
+        )
+        return profile
+
+    if platform_hits:
+        profile.update(
+            {
+                "frame": "플랫폼_입장" if "플랫폼" in text and "상생" not in text else "상생_강조",
+                "tone": "설명적",
+                "primary_voice": "플랫폼 업계 및 소상공인",
+                "issue_tags": ["배달앱", "수수료", "플랫폼"] if not title_tags else title_tags,
+                "framing_analysis": "이 기사는 플랫폼 수수료와 상생 논의를 중심 문제로 배치합니다. 비용 구조와 규제 필요성이 어떤 순서로 등장하는지에 따라 읽는 방향이 달라집니다.",
+                "citation_analysis": "플랫폼 업계와 점주·소상공인 중 누가 더 구체적으로 발언하는지 확인하는 것이 중요합니다.",
+                "missing_perspective": "소비자 비용 변화나 규제 이후의 시장 구조 변화가 빠져 있다면, 그 부분을 다루는 비교 기사가 필요합니다.",
+                "reading_focus": "플랫폼의 설명이 중심인지, 현장 점주의 부담이 중심인지 먼저 확인해 보세요.",
+            }
+        )
+        return profile
+
+    if retail_hits:
+        profile.update(
+            {
+                "frame": "골목상권_보호" if "골목상권" in text else "소비자_편의",
+                "tone": "설명적",
+                "primary_voice": "유통업계 및 상권 이해관계자",
+                "issue_tags": ["대형마트", "새벽배송", "유통규제"] if not title_tags else title_tags,
+                "framing_analysis": "이 기사는 유통 규제의 편익과 부담 중 어느 쪽을 더 앞세우는지에 따라 읽히는 방향이 달라집니다.",
+                "citation_analysis": "대형 유통업체, 소비자, 골목상권 중 누구의 목소리가 중심 근거가 되는지 확인해 볼 필요가 있습니다.",
+                "missing_perspective": "규제 완화의 소비자 편익과 골목상권 보호 논리가 동시에 충분히 다뤄지는지 비교 기사를 통해 확인해 보세요.",
+                "reading_focus": "편의와 보호 중 어느 단어가 더 반복되는지, 누구의 손익이 중심 근거로 놓이는지 살펴보세요.",
+            }
+        )
+        return profile
+
+    if election_hits:
+        profile.update(
+            {
+                "frame": "국가책임" if _contains_any(text, ("사과", "책임", "무효", "재선거")) else "제도개선",
+                "tone": "우려 중심",
+                "primary_voice": "선관위 및 정치권",
+                "issue_tags": ["지방선거", "선관위", "투표용지"] if not title_tags else title_tags,
+                "framing_analysis": "이 기사는 선거 관리 실패 또는 제도 보완 필요성을 핵심 쟁점으로 밀어 올립니다. 책임 소재와 재발 방지 중 무엇이 더 크게 다뤄지는지에 따라 프레임이 달라집니다.",
+                "citation_analysis": "선관위 설명, 정치권 비판, 유권자 피해 호소 중 어느 목소리가 중심 근거가 되는지 확인해 볼 필요가 있습니다.",
+                "missing_perspective": "실제 투표권 침해 경험이나 구체적 제도 개선안이 충분히 다뤄지는지 비교 기사를 통해 보완하면 좋습니다.",
+                "reading_focus": "책임 추궁과 제도 개선 논리 중 무엇이 기사 초반에 더 크게 놓이는지 먼저 확인해 보세요.",
+            }
+        )
+        return profile
+
+    if medical_hits:
+        primary_voice = "의료계" if _contains_any(text, ("의협", "전공의", "의사")) else "정부"
+        frame = "환자_피해" if "환자" in text else ("지역의료_확충" if "지역의료" in text else "의료계_반발")
+        profile.update(
+            {
+                "frame": frame,
+                "tone": "갈등적",
+                "primary_voice": primary_voice,
+                "issue_tags": ["의료개혁", "전공의", "의대정원"] if not title_tags else title_tags,
+                "framing_analysis": "이 기사는 의료개혁을 두고 정책 정당성, 의료계 반발, 환자 영향 중 무엇을 더 크게 앞세우는지 보여줍니다.",
+                "citation_analysis": "정부 설명과 의료계 발언이 어떤 비중으로 제시되는지, 환자나 지역 의료 현장 관점은 얼마나 살아 있는지 확인해 보세요.",
+                "missing_perspective": "환자 영향, 지역 의료 공백, 정책 시행 근거 데이터 중 무엇이 빠져 있는지 비교 기사를 통해 확인할 필요가 있습니다.",
+                "reading_focus": "같은 사건을 정책 추진 문제로 읽게 하는지, 환자 피해나 의료계 반발 문제로 읽게 하는지 먼저 구분해 보세요.",
+            }
+        )
+        return profile
+
+    if housing_hits:
+        profile.update(
+            {
+                "frame": "피해자_보호",
+                "tone": "우려 중심",
+                "primary_voice": "피해자 및 정부",
+                "issue_tags": ["전세사기", "피해자", "특별법"] if not title_tags else title_tags,
+                "framing_analysis": "이 기사는 피해자 구제와 주거 불안 문제를 앞세워 사건을 읽게 만듭니다.",
+                "citation_analysis": "피해자 호소와 정부 대책 중 어느 쪽이 더 길게 설명되는지에 따라 독자의 체감이 달라질 수 있습니다.",
+                "missing_perspective": "실제 구제 집행 속도, 사각지대, 금융·법적 후속 과제가 충분히 다뤄지는지 비교 기사를 통해 확인해 보세요.",
+                "reading_focus": "피해 사실 묘사와 제도 개선 설명 중 어느 부분에 더 많은 공간이 배정되는지 주목해 보세요.",
+            }
+        )
+        return profile
+
+    if support_hits:
+        profile.update(
+            {
+                "frame": "민생경제_회복",
+                "tone": "설명적",
+                "primary_voice": "정부 및 재정 정책 주체",
+                "issue_tags": ["민생지원금", "추경", "소비쿠폰"] if not title_tags else title_tags,
+                "framing_analysis": "이 기사는 지원 정책의 경기 부양 효과를 핵심 문제로 앞세웁니다. 동시에 재정 부담 논리가 얼마나 함께 설명되는지에 따라 해석이 달라집니다.",
+                "citation_analysis": "정부의 정책 설명이 중심인지, 재정 우려나 현장 체감 의견이 함께 제시되는지 살펴볼 필요가 있습니다.",
+                "missing_perspective": "재정 건전성, 정책 효과의 지속성, 실제 체감 소비 변화가 충분히 설명되는지 비교 기사를 통해 보완하면 좋습니다.",
+                "reading_focus": "지원의 효과와 비용 중 어느 쪽이 기사 앞부분에서 먼저 부각되는지 확인해 보세요.",
+            }
+        )
+        return profile
+
+    if title_tags:
+        profile["issue_tags"] = title_tags
+    return profile
+
+
 def _build_mock_analysis(article: dict, notice: str) -> dict[str, Any]:
     """Create a readable fallback so the app still runs without API keys."""
     title = article.get("title", "입력 기사")
@@ -290,6 +518,7 @@ def _build_mock_analysis(article: dict, notice: str) -> dict[str, Any]:
     body = article.get("body", "")
     excerpt = body[:160].strip()
     sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|(?<=다\.)\s+|(?<=요\.)\s+", body) if part.strip()]
+    profile = _infer_mock_profile(article)
 
     reading_highlights: list[dict[str, str]] = []
     if sentences:
@@ -322,14 +551,16 @@ def _build_mock_analysis(article: dict, notice: str) -> dict[str, Any]:
                 if excerpt
                 else f"'{title}' 기사에 대한 개발용 요약 결과입니다."
             ),
-            "framing_analysis": (
-                f"{source} 기사에서 어떤 행위자와 주장에 더 많은 지면이 배정되는지 살펴보도록 설계된 mock 분석입니다."
-            ),
-            "language_analysis": "실제 API 없이 실행 중이므로, 감정적 표현이나 평가어 존재 여부를 점검하는 예시 문장입니다.",
-            "citation_analysis": "실제 API 없이 실행 중이므로, 어떤 출처가 더 자주 등장하는지 확인하는 예시 문장입니다.",
-            "title_body_gap": "제목과 본문의 강조점이 완전히 같은지, 혹은 제목이 더 강한 어조를 쓰는지 비교하는 예시 문장입니다.",
-            "missing_perspective": "다른 이해관계자, 반대 입장, 구조적 배경 맥락을 함께 읽어보라는 안내용 예시 문장입니다.",
-            "reading_focus": "이 기사를 읽을 때는 초반 문제 설정 문장과, 수치나 직접 발언이 실제로 얼마나 구체적인지 먼저 확인해 보세요.",
+            "frame": profile["frame"],
+            "tone": profile["tone"],
+            "primary_voice": profile["primary_voice"],
+            "issue_tags": profile["issue_tags"],
+            "framing_analysis": profile["framing_analysis"],
+            "language_analysis": profile["language_analysis"],
+            "citation_analysis": profile["citation_analysis"],
+            "title_body_gap": profile["title_body_gap"],
+            "missing_perspective": profile["missing_perspective"],
+            "reading_focus": profile["reading_focus"],
             "reading_highlights": reading_highlights,
             "bias_axis": 0.0,
             "bias_strength": 24.0,
@@ -360,9 +591,8 @@ def _build_mock_analysis(article: dict, notice: str) -> dict[str, Any]:
 def _build_mock_dataset_tag(article: dict, issue: str, notice: str) -> dict[str, Any]:
     """Create a mock dataset tag so data-building scripts still run without API keys."""
     title = article.get("title", "입력 기사")
-    body = article.get("body", "")
     source = article.get("source", "해당 기사")
-    excerpt = body[:140].strip()
+    profile = _infer_mock_profile(article)
     issue_terms = [issue] if issue else []
     if article.get("source"):
         issue_terms.append(str(article["source"]).strip())
@@ -371,12 +601,11 @@ def _build_mock_dataset_tag(article: dict, issue: str, notice: str) -> dict[str,
     mock_tag.update(
         {
             "sub_issue": f"{issue} 관련 세부 쟁점" if issue else DEFAULT_DATASET_TAG["sub_issue"],
-            "issue_tags": issue_terms[:2] + ["정책", "사회"][: max(0, 3 - len(issue_terms[:2]))],
-            "memo": (
-                f"'{title}' 기사에서 {source}가 어떤 주체와 강조점을 전면에 두는지 기준으로 생성한 mock 태깅 결과입니다."
-                if excerpt
-                else DEFAULT_DATASET_TAG["memo"]
-            ),
+            "issue_tags": (issue_terms[:1] + profile["issue_tags"])[:3],
+            "frame": profile["frame"],
+            "tone": "중립적" if profile["tone"] not in {"긍정적", "부정적", "중립적", "혼합"} else profile["tone"],
+            "primary_voice": profile["primary_voice"],
+            "memo": f"'{title}' 기사에서 {source}가 '{profile['frame']}' 프레임으로 어떤 주체를 전면에 두는지 기준으로 생성한 mock 태깅 결과입니다.",
             "tagging_notice": notice,
         }
     )
@@ -524,18 +753,63 @@ def _call_anthropic_prompt(system_prompt: str, user_prompt: str, max_tokens: int
     return "\n".join(text_blocks)
 
 
-def _call_llm_text(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str:
-    """Dispatch a prompt to whichever LLM provider is configured."""
-    if _get_google_api_key():
-        return _call_google_prompt(system_prompt, user_prompt, max_tokens=max_tokens)
+def _summarize_provider_error(exc: Exception) -> str:
+    """Compress provider errors into one readable line for fallback notices."""
+    message = str(exc).strip() or exc.__class__.__name__
+    message = re.sub(r"\s+", " ", message)
+    if len(message) > 220:
+        message = f"{message[:217]}..."
+    return message
 
-    if os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY"):
-        return _call_openai_prompt(system_prompt, user_prompt)
+
+def _provider_attempts(system_prompt: str, user_prompt: str, max_tokens: int) -> list[tuple[str, Any]]:
+    """Build provider call attempts in fallback order."""
+    attempts: list[tuple[str, Any]] = []
+
+    if _get_google_api_key():
+        attempts.append(
+            (
+                "Gemini",
+                lambda: _call_google_prompt(system_prompt, user_prompt, max_tokens=max_tokens),
+            )
+        )
+
+    if os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"):
+        provider_name = "OpenRouter" if os.getenv("OPENROUTER_API_KEY") else "OpenAI"
+        attempts.append(
+            (
+                provider_name,
+                lambda: _call_openai_prompt(system_prompt, user_prompt),
+            )
+        )
 
     if os.getenv("ANTHROPIC_API_KEY"):
-        return _call_anthropic_prompt(system_prompt, user_prompt, max_tokens=max_tokens)
+        attempts.append(
+            (
+                "Anthropic",
+                lambda: _call_anthropic_prompt(system_prompt, user_prompt, max_tokens=max_tokens),
+            )
+        )
 
-    raise RuntimeError(f"{SUPPORTED_LLM_KEY_TEXT}가 설정되지 않았습니다.")
+    return attempts
+
+
+def _call_llm_text(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str:
+    """Dispatch a prompt across configured providers with automatic fallback."""
+    attempts = _provider_attempts(system_prompt, user_prompt, max_tokens)
+    if not attempts:
+        raise NoConfiguredProviderError(f"{SUPPORTED_LLM_KEY_TEXT}가 설정되지 않았습니다.")
+
+    errors: list[str] = []
+    for provider_name, call in attempts:
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 - provider fallback should be resilient
+            errors.append(f"{provider_name}: {_summarize_provider_error(exc)}")
+            continue
+
+    joined = " | ".join(errors) if errors else "원인을 확인하지 못했습니다."
+    raise LLMProviderFailure(f"모든 LLM provider 호출이 실패했습니다. {joined}")
 
 
 def _default_compare_point(analysis: dict[str, Any]) -> str:
@@ -613,8 +887,9 @@ def request_llm_json(system_prompt: str, user_prompt: str, max_tokens: int = 120
     """
     Public helper for scripts that need a JSON-only LLM response.
 
-    Raises RuntimeError when no provider key exists and ValueError when parsing
-    fails, so callers can decide whether to skip or use mock fallbacks.
+    Raises NoConfiguredProviderError when no provider key exists, ValueError
+    when parsing fails, and LLMProviderFailure when configured providers all
+    fail, so callers can decide whether to skip or use mock fallbacks.
     """
     load_dotenv()
     raw_text = _call_llm_text(system_prompt, user_prompt, max_tokens=max_tokens)
@@ -637,20 +912,34 @@ def analyze_article(article: dict) -> dict[str, Any]:
         )
 
     try:
-        raw_text = _call_llm_text(SYSTEM_PROMPT, get_analysis_prompt(article))
-        normalized = _normalize_analysis(_parse_json_response(raw_text))
+        raw_text = _call_llm_text(
+            SYSTEM_PROMPT,
+            get_analysis_prompt(article),
+            max_tokens=2200,
+        )
+        try:
+            normalized = _normalize_analysis(_parse_json_response(raw_text))
+        except ValueError:
+            # Retry once with a larger budget because Gemini sometimes truncates
+            # the long JSON schema used by the main analysis response.
+            retry_text = _call_llm_text(
+                SYSTEM_PROMPT,
+                get_analysis_prompt(article),
+                max_tokens=2800,
+            )
+            normalized = _normalize_analysis(_parse_json_response(retry_text))
         return _calibrate_supplemental_diagnostics(normalized, article)
-    except RuntimeError:
+    except NoConfiguredProviderError:
         return _build_mock_analysis(
             article,
             f"{SUPPORTED_LLM_KEY_TEXT}가 없어 mock 분석 결과를 표시합니다.",
         )
-    except ImportError:
+    except ValueError as exc:
         return _build_mock_analysis(
             article,
-            "LLM SDK가 설치되지 않아 mock 분석 결과를 표시합니다.",
+            f"{exc} mock 분석 결과로 대체했습니다.",
         )
-    except ValueError as exc:
+    except LLMProviderFailure as exc:
         return _build_mock_analysis(
             article,
             f"{exc} mock 분석 결과로 대체했습니다.",
@@ -681,19 +970,19 @@ def explain_external_candidates(article: dict, analysis: dict, candidates: list[
             max_tokens=1400,
         )
         return _normalize_external_guidance(_parse_json_response(raw_text), candidates)
-    except RuntimeError:
+    except NoConfiguredProviderError:
         return _build_mock_external_guidance(
             analysis,
             candidates,
             f"{SUPPORTED_LLM_KEY_TEXT}가 없어 외부 후보 기사 설명은 mock 안내문으로 표시합니다.",
         )
-    except ImportError:
+    except ValueError as exc:
         return _build_mock_external_guidance(
             analysis,
             candidates,
-            "LLM SDK가 없어 외부 후보 기사 설명은 mock 안내문으로 표시합니다.",
+            f"{exc} 외부 후보 기사 설명은 mock 안내문으로 대체했습니다.",
         )
-    except ValueError as exc:
+    except LLMProviderFailure as exc:
         return _build_mock_external_guidance(
             analysis,
             candidates,
@@ -731,19 +1020,11 @@ def tag_article_metadata(article: dict, issue: str) -> dict[str, Any]:
         normalized = _normalize_dataset_tag(payload)
         normalized["tagging_status"] = "ok"
         return normalized
-    except RuntimeError:
+    except NoConfiguredProviderError:
         mock_tag = _build_mock_dataset_tag(
             article,
             issue,
             f"{SUPPORTED_LLM_KEY_TEXT}가 없어 mock 태깅 결과를 표시합니다.",
-        )
-        mock_tag["tagging_status"] = "mock"
-        return mock_tag
-    except ImportError:
-        mock_tag = _build_mock_dataset_tag(
-            article,
-            issue,
-            "LLM SDK가 설치되지 않아 mock 태깅 결과를 표시합니다.",
         )
         mock_tag["tagging_status"] = "mock"
         return mock_tag
@@ -754,6 +1035,14 @@ def tag_article_metadata(article: dict, issue: str) -> dict[str, Any]:
             f"{exc} mock 태깅 결과로 대체했습니다.",
         )
         mock_tag["tagging_status"] = "mock"
+        return mock_tag
+    except LLMProviderFailure as exc:
+        mock_tag = _build_mock_dataset_tag(
+            article,
+            issue,
+            f"{exc} mock 태깅 결과로 대체했습니다.",
+        )
+        mock_tag["tagging_status"] = "failed"
         return mock_tag
     except Exception as exc:
         mock_tag = _build_mock_dataset_tag(

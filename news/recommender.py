@@ -208,6 +208,23 @@ def _specific_tag_overlap_count(query_tags: set[str], candidate_tags: set[str]) 
     )
 
 
+def _voice_difference_score(query_voice: str, candidate_voice: str) -> int:
+    """Prefer candidates foregrounding a different main actor or stakeholder."""
+    normalized_query_voice = _compact(query_voice)
+    normalized_candidate_voice = _compact(candidate_voice)
+    if not normalized_query_voice or not normalized_candidate_voice:
+        return 0
+    return 1 if normalized_query_voice != normalized_candidate_voice else 0
+
+
+def _sub_issue_difference_score(query_text: str, candidate_sub_issue: str) -> int:
+    """Prefer candidates that seem to foreground a different sub-angle of the same issue."""
+    normalized_sub_issue = _compact(candidate_sub_issue)
+    if not normalized_sub_issue:
+        return 0
+    return 1 if normalized_sub_issue not in _compact(query_text) else 0
+
+
 def _build_candidates(
     article: dict | None,
     analysis: dict,
@@ -221,6 +238,7 @@ def _build_candidates(
 
     query_tags = _split_tags(analysis.get("issue_tags", []))
     query_frame = _compact(analysis.get("frame", ""))
+    query_voice = str(analysis.get("primary_voice", "")).strip()
     query_text_tags, query_text = _query_context(article, analysis)
     normalized_query_tags = {_compact(tag) for tag in query_tags + query_text_tags if _compact(tag)}
 
@@ -258,6 +276,8 @@ def _build_candidates(
             1 if issue_score > 0 else 0,
             specific_overlap_count,
             issue_score,
+            _voice_difference_score(query_voice, row.get("primary_voice", "")),
+            _sub_issue_difference_score(query_text, row.get("sub_issue", "")),
             _status_score(row),
             len((row.get("body_excerpt") or "").strip()),
         )
@@ -294,7 +314,7 @@ def recommend_articles(article: dict | None, analysis: dict, limit: int = 3) -> 
         return {
             "tier": "curated",
             "heading": "다른 관점 기사",
-            "caption": "같은 이슈를 다른 강조점으로 다룬 기사를 먼저 골랐습니다.",
+            "caption": "같은 이슈를 다른 강조점이나 다른 중심 주체로 읽게 하는 기사를 먼저 골랐습니다.",
             "notice": _dataset_notice("curated"),
             "articles": curated_candidates,
         }
@@ -304,7 +324,7 @@ def recommend_articles(article: dict | None, analysis: dict, limit: int = 3) -> 
         return {
             "tier": "expanded",
             "heading": "관련 관점 기사",
-            "caption": "입력 기사와 비슷한 쟁점을 다른 강조점으로 다루는 기사를 골랐습니다.",
+            "caption": "입력 기사와 비슷한 쟁점을 다른 강조점이나 다른 인용 중심으로 다루는 기사를 골랐습니다.",
             "notice": _dataset_notice("expanded") or _dataset_notice("curated"),
             "articles": expanded_candidates,
         }

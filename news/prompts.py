@@ -97,6 +97,9 @@ If none of the candidates fit the article well enough, create one short new fram
   1. What does this article make feel most important?
   2. Which actor's voice is easiest to hear in the article?
   3. What should I compare in another article to read this issue more critically?
+- Treat frame as an issue-salience label: explain what problem, risk, responsibility, benefit, or institutional question is pushed to the front.
+- In citation_analysis, distinguish between official sources (government, institutions, companies, experts) and field actors (citizens, workers, patients, victims, small merchants, local residents) when that distinction matters.
+- In missing_perspective, name the absent stakeholder, missing data, or omitted background as concretely as possible, then suggest what kind of second article would complement this one.
 - When useful, mention 1-2 short expressions or headline choices from the article as evidence.
 - Prefer concrete nouns and actors over abstract wording.
 - If the article gives thin evidence for a field, say exactly what is thin or missing instead of padding with generic prose.
@@ -121,7 +124,7 @@ If none of the candidates fit the article well enough, create one short new fram
   "frame": "Prefer one of [{FRAME_CANDIDATES_INLINE}]; create a short new one only if truly necessary",
   "tone": "One short Korean label such as 설명적, 우려 중심, 비판적, 중립적",
   "primary_voice": "The specific actor, institution, or stakeholder most foregrounded in the article",
-  "issue_tags": ["2-3 short tags describing the issue"],
+  "issue_tags": ["2-3 short search-friendly tags naming the issue, key actors, institutions, or core topics. Do not repeat frame words."],
   "framing_analysis": "2-3 sentences. Explain what conflict, responsibility, risk, benefit, or institutional problem is pushed to the front. Also say what is left in the background if that helps the reader.",
   "language_analysis": "2-3 sentences. Explain the tone using concrete wording, labels, or short expressions from the article where useful. Focus on what kind of emotional or interpretive pressure those words create.",
   "citation_analysis": "2-3 sentences. Explain which voices are directly quoted, which side gets more room, who is summarized indirectly, and what that means for how the reader encounters the issue.",
@@ -328,11 +331,15 @@ Return ONLY the JSON object and do not wrap it in ```json fences.
 [Writing Reminder]
 - Be concrete and useful for a reader, not abstract.
 - Mention what is foregrounded, whose voice is loudest, and what comparison article would complement this one.
+- For frame, focus on what issue or problem is made most salient, not on abstract ideology labels.
+- For citation_analysis, say whose voice functions like the main factual anchor and whether other stakeholders are only briefly paraphrased or missing.
+- For missing_perspective, point to a missing stakeholder, data point, or background context and say what kind of comparison article would fill that gap.
 - Write as if the reader will decide in 30 seconds what to compare next.
 - Do not repeat the same idea in summary, framing_analysis, and citation_analysis.
 - Keep each field focused and readable.
 - For reading_highlights, choose only 3-5 sentences that genuinely deserve a note.
 - Copy the original sentence exactly as it appears in the article body. Do not paraphrase.
+- If you cannot copy a sentence exactly from the article body, omit it instead of reconstructing or cleaning it.
 - If a sentence is plain background with no special reading value, do not include it in reading_highlights.
 - Fill the supplementary diagnostic fields too: bias_axis, bias_strength, emotionality, source_balance, evidence_quality, content_bias, background_bias, perspective_vector.
 - These supplementary diagnostics should remain evidence-based and practical, not ideological slogans.
