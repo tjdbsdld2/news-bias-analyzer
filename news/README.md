@@ -53,8 +53,31 @@ python3 -m venv .venv
 
 ### 2. 가상환경 활성화
 
+> 터미널이 이미 `news` 폴더에 열려 있으면 `cd news`는 생략해도 됩니다.
+
+#### Linux / macOS
 ```bash
+cd news
 source .venv/bin/activate
+```
+
+#### Windows PowerShell
+```powershell
+cd news
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+.\.venv\Scripts\Activate.ps1
+```
+
+#### Windows CMD
+```cmd
+cd news
+.\.venv\Scripts\activate.bat
+```
+
+#### Git Bash / WSL
+```bash
+cd news
+source .venv/Scripts/activate
 ```
 
 ### 3. 패키지 설치
@@ -65,51 +88,86 @@ pip install -r requirements.txt
 
 ### 4. `.env` 파일 준비
 
-`news/` 폴더 또는 프로젝트 루트에 `.env` 파일을 두고 아래 값 중 필요한 것을 설정합니다.
+#### Windows 사용자: VS Code에서 파일 생성
+
+1. VS Code 왼쪽 **Explorer** 패널에서 `news` 폴더 우클릭
+2. **New File** 선택
+3. 파일명: `.env` 입력
+4. 아래 내용을 복사하여 붙여넣기:
 
 ```env
 PORT=5000
 FLASK_ENV=development
 
-GOOGLE_API_KEY=...
+GOOGLE_API_KEY=YOUR_API_KEY_HERE
 GOOGLE_MODEL=models/gemini-flash-lite-latest
+```
 
-OPENROUTER_API_KEY=...
+5. `YOUR_API_KEY_HERE`를 실제 API 키로 바꾸기
+6. 저장 (Ctrl+S)
+
+#### (선택) 다른 API 키 추가
+
+위 내용 대신 이 중 하나를 사용할 수도 있습니다:
+
+```env
+# OpenRouter 사용
+OPENROUTER_API_KEY=YOUR_API_KEY_HERE
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_HTTP_REFERER=https://newsight.local
+```
 
-OPENAI_API_KEY=...
+```env
+# OpenAI 사용
+OPENAI_API_KEY=YOUR_API_KEY_HERE
 OPENAI_MODEL=gpt-4o-mini
+```
 
-ANTHROPIC_API_KEY=...
+```env
+# Anthropic 사용
+ANTHROPIC_API_KEY=YOUR_API_KEY_HERE
 ANTHROPIC_MODEL=claude-3-5-sonnet-latest
 ```
 
-여러 키를 동시에 넣어도 되지만, 현재 코드는 아래 우선순위로 사용합니다.
-
-1. `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY`
-2. `OPENROUTER_API_KEY`
-3. `OPENAI_API_KEY`
-4. `ANTHROPIC_API_KEY`
+**우선순위** (한 개만 설정해도 됨):
+1. Google (권장)
+2. OpenRouter
+3. OpenAI
+4. Anthropic
 5. 없으면 mock 결과
 
 ## 실행
 
-```bash
-cd /Users/choiseoyoon/news-bias-analyzer/news
-python3 app.py
+### 기본 실행 (권장)
+
+1. PowerShell 또는 CMD 열기
+2. `news` 폴더에서:
+
+```powershell
+python app.py
 ```
 
-기본 포트는 `5000`입니다. 이미 사용 중이면 다른 포트로 실행할 수 있습니다.
-
-```bash
-PORT=5001 python3 app.py
+성공하면 다음 같은 메시지가 나옵니다:
+```
+ * Running on http://localhost:5000
 ```
 
-브라우저에서 아래 주소로 접속합니다.
+3. 브라우저에서 `http://localhost:5000` 열기
 
-- `http://localhost:5000`
-- 또는 지정한 포트
+### 포트 변경 (필요시)
+
+이미 5000 포트를 사용 중이면:
+
+```powershell
+$env:PORT="5001"
+python app.py
+```
+
+또는 `.env` 파일에서 `PORT=5001` 로 수정
+
+### 앱 종료
+
+PowerShell에서 `Ctrl+C` 누르기
 
 ## 현재 반영된 개선점
 
