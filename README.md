@@ -94,12 +94,7 @@ pip install -r requirements.txt
 
 프로젝트 루트 폴더에 `.env` 파일을 생성합니다.
 
-### Windows 사용자: VS Code에서 파일 생성
-
-1. VS Code 왼쪽 **Explorer** 패널에서 `news-bias-analyzer` 폴더를 엽니다.
-2. **New File** 선택
-3. 파일명: `.env` 입력
-4. 아래 내용을 복사하여 붙여넣기
+VS Code나 다른 텍스트 편집기에서 새 파일을 만들고 아래 내용을 붙여넣습니다.
 
 ```env
 PORT=5000
@@ -110,8 +105,6 @@ GOOGLE_MODEL=models/gemini-flash-lite-latest
 ```
 
 `YOUR_API_KEY_HERE` 부분을 실제 API 키로 바꿔주세요.
-
-5. 저장합니다.
 
 > `.env` 파일에는 API 키가 들어가므로 GitHub에 업로드하지 않습니다.
 
