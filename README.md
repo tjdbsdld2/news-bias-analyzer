@@ -66,6 +66,11 @@ source .venv/bin/activate
 
 ```powershell
 python -m venv .venv
+```
+
+PowerShell에서 실행 권한 오류가 발생하면 아래 명령어를 먼저 실행합니다.
+
+```powershell
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
 .\.venv\Scripts\Activate.ps1
 ```
@@ -77,7 +82,14 @@ python -m venv .venv
 .\.venv\Scripts\activate.bat
 ```
 
-### Git Bash / WSL
+### Git Bash
+
+```bash
+python -m venv .venv
+source .venv/Scripts/activate
+```
+
+### WSL
 
 ```bash
 python3 -m venv .venv
@@ -105,6 +117,9 @@ GOOGLE_MODEL=models/gemini-flash-lite-latest
 ```
 
 `YOUR_API_KEY_HERE` 부분을 실제 API 키로 바꿔주세요.
+
+Google Gemini 키는 `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY`로 설정할 수 있습니다.  
+모델명은 `GOOGLE_MODEL` 또는 `GEMINI_MODEL`로 설정할 수 있습니다.
 
 > `.env` 파일에는 API 키가 들어가므로 GitHub에 업로드하지 않습니다.
 
@@ -174,6 +189,9 @@ GOOGLE_API_KEY=YOUR_API_KEY_HERE
 GOOGLE_MODEL=models/gemini-flash-lite-latest
 ```
 
+Google Gemini 키는 `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY`로 설정할 수 있습니다.  
+모델명은 `GOOGLE_MODEL` 또는 `GEMINI_MODEL`로 설정할 수 있습니다.
+
 선택적으로 다른 provider를 사용할 수도 있습니다.
 
 ```env
@@ -238,7 +256,6 @@ news-bias-analyzer/
 │   ├── app.css
 │   └── app.js
 ├── data/
-│   ├── articles.db
 │   ├── articles_curated.csv
 │   ├── articles_expanded.csv
 │   └── curated_explore.json
