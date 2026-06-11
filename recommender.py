@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import csv
 import logging
+import math
 import re
+from collections import Counter
+from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from difflib import SequenceMatcher
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -49,6 +51,7 @@ GENERIC_TAGS = {
 REQUIRED_COLUMNS = {"url", "title", "frame", "issue_tags"}
 
 logger = logging.getLogger(__name__)
+TOKEN_PATTERN = re.compile(r"[0-9A-Za-z가-힣]+")
 
 
 def _compact(text: str) -> str:
@@ -63,6 +66,29 @@ def _split_tags(value: Any) -> list[str]:
     if isinstance(value, str):
         return [part.strip() for part in re.split(r"[;,/]", value) if part.strip()]
     return []
+
+
+def _tokenize_text(text: str) -> list[str]:
+    """Tokenize mixed Korean/English text for lightweight TF-IDF matching."""
+    return [
+        token.lower()
+        for token in TOKEN_PATTERN.findall(text or "")
+        if len(token) >= 2
+    ]
+
+
+def _candidate_semantic_text(row: dict[str, str]) -> str:
+    """Build a semantic comparison text from candidate metadata."""
+    parts = [
+        row.get("issue", ""),
+        row.get("title", ""),
+        row.get("sub_issue", ""),
+        row.get("memo", ""),
+        row.get("body_excerpt", ""),
+        " ".join(_split_tags(row.get("issue_tags", ""))),
+        row.get("primary_voice", ""),
+    ]
+    return " ".join(part for part in parts if part)
 
 
 def _dataset_path(dataset_name: str) -> Path:
@@ -198,6 +224,20 @@ def _query_context(article: dict | None, analysis: dict) -> tuple[list[str], str
     return query_tags, " ".join(part for part in query_text_parts if part)
 
 
+def _query_semantic_text(article: dict | None, analysis: dict) -> str:
+    """Build a semantic comparison text from the input article and analysis."""
+    parts = [
+        article.get("title", "") if isinstance(article, dict) else "",
+        analysis.get("issue", "") if isinstance(analysis, dict) else "",
+        analysis.get("sub_issue", "") if isinstance(analysis, dict) else "",
+        analysis.get("summary", "") if isinstance(analysis, dict) else "",
+        analysis.get("framing_analysis", "") if isinstance(analysis, dict) else "",
+        analysis.get("primary_voice", "") if isinstance(analysis, dict) else "",
+        " ".join(_split_tags(analysis.get("issue_tags", []))),
+    ]
+    return " ".join(part for part in parts if part)
+
+
 def _specific_tag_overlap_count(query_tags: set[str], candidate_tags: set[str]) -> int:
     """Count only non-generic overlapping tags for local recommendation decisions."""
     return len(
@@ -233,6 +273,67 @@ def _title_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left, right).ratio()
 
 
+@lru_cache(maxsize=4)
+def _tfidf_idf_map(dataset_name: str) -> dict[str, float]:
+    """Precompute simple IDF weights for one recommendation dataset."""
+    rows = _load_dataset(dataset_name)
+    if not rows:
+        return {}
+
+    document_frequency: Counter[str] = Counter()
+    document_count = 0
+
+    for row in rows:
+        tokens = set(_tokenize_text(_candidate_semantic_text(row)))
+        if not tokens:
+            continue
+        document_count += 1
+        document_frequency.update(tokens)
+
+    if document_count == 0:
+        return {}
+
+    return {
+        token: math.log((1 + document_count) / (1 + frequency)) + 1.0
+        for token, frequency in document_frequency.items()
+    }
+
+
+def _tfidf_cosine_similarity(query_text: str, candidate_text: str, dataset_name: str) -> float:
+    """Compute a lightweight TF-IDF cosine similarity as a tie-breaker signal."""
+    idf_map = _tfidf_idf_map(dataset_name)
+    if not idf_map:
+        return 0.0
+
+    query_tokens = _tokenize_text(query_text)
+    candidate_tokens = _tokenize_text(candidate_text)
+    if not query_tokens or not candidate_tokens:
+        return 0.0
+
+    query_counts = Counter(query_tokens)
+    candidate_counts = Counter(candidate_tokens)
+    shared_tokens = set(query_counts).intersection(candidate_counts)
+    if not shared_tokens:
+        return 0.0
+
+    query_vector = {
+        token: (count / len(query_tokens)) * idf_map.get(token, 1.0)
+        for token, count in query_counts.items()
+    }
+    candidate_vector = {
+        token: (count / len(candidate_tokens)) * idf_map.get(token, 1.0)
+        for token, count in candidate_counts.items()
+    }
+
+    numerator = sum(query_vector[token] * candidate_vector[token] for token in shared_tokens)
+    query_norm = math.sqrt(sum(value * value for value in query_vector.values()))
+    candidate_norm = math.sqrt(sum(value * value for value in candidate_vector.values()))
+    if query_norm == 0.0 or candidate_norm == 0.0:
+        return 0.0
+
+    return numerator / (query_norm * candidate_norm)
+
+
 def _build_candidates(
     article: dict | None,
     analysis: dict,
@@ -250,6 +351,7 @@ def _build_candidates(
     query_issue = str(analysis.get("issue", "")).strip()
     query_sub_issue = str(analysis.get("sub_issue", "")).strip()
     query_text_tags, query_text = _query_context(article, analysis)
+    query_semantic_text = _query_semantic_text(article, analysis)
     normalized_query_tags = {_compact(tag) for tag in query_tags + query_text_tags if _compact(tag)}
 
     if not normalized_query_tags and not query_text.strip():
@@ -281,6 +383,11 @@ def _build_candidates(
         voice_difference = _voice_difference_score(query_voice, row.get("primary_voice", ""))
         sub_issue_difference = _sub_issue_difference_score(query_text, candidate_sub_issue)
         title_similarity = _title_similarity(input_title, candidate_title)
+        semantic_similarity = _tfidf_cosine_similarity(
+            query_semantic_text,
+            _candidate_semantic_text(row),
+            dataset_name,
+        )
 
         compare_signal = voice_difference + sub_issue_difference + (1 if query_frame and candidate_frame and candidate_frame != query_frame else 0)
         if query_frame and candidate_frame == query_frame and compare_signal <= 0:
@@ -294,7 +401,7 @@ def _build_candidates(
         if title_similarity >= 0.82 and issue_exact_match == 0 and issue_score <= 0 and specific_overlap_count < (min_specific_overlap + 1):
             continue
 
-        score = (
+        primary_score = (
             issue_exact_match,
             1 if issue_score > 0 else 0,
             specific_overlap_count,
@@ -307,7 +414,10 @@ def _build_candidates(
         )
         scored.append(
             (
-                score,
+                (
+                    primary_score,
+                    round(semantic_similarity, 4),
+                ),
                 {
                     "issue": row.get("issue", ""),
                     "title": row.get("title", ""),
