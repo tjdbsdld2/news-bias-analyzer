@@ -77,6 +77,13 @@ python -m venv .venv
 .\.venv\Scripts\activate.bat
 ```
 
+### Git Bash / WSL
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
 ## 3. 패키지 설치
 
 ```bash
@@ -86,6 +93,13 @@ pip install -r requirements.txt
 ## 4. `.env` 파일 생성
 
 프로젝트 루트 폴더에 `.env` 파일을 생성합니다.
+
+### Windows 사용자: VS Code에서 파일 생성
+
+1. VS Code 왼쪽 **Explorer** 패널에서 `news-bias-analyzer` 폴더를 엽니다.
+2. **New File** 선택
+3. 파일명: `.env` 입력
+4. 아래 내용을 복사하여 붙여넣기
 
 ```env
 PORT=5000
@@ -97,12 +111,24 @@ GOOGLE_MODEL=models/gemini-flash-lite-latest
 
 `YOUR_API_KEY_HERE` 부분을 실제 API 키로 바꿔주세요.
 
+5. 저장합니다.
+
 > `.env` 파일에는 API 키가 들어가므로 GitHub에 업로드하지 않습니다.
 
 ## 5. 실행
 
+아래 명령은 `news-bias-analyzer` 루트 폴더에서 실행합니다.
+
+### macOS / Linux
+
 ```bash
 python3 app.py
+```
+
+### Windows PowerShell / CMD
+
+```powershell
+python app.py
 ```
 
 성공하면 브라우저에서 아래 주소로 접속합니다.
@@ -113,8 +139,24 @@ http://localhost:5000/
 
 포트를 바꾸고 싶다면 `.env` 파일에서 `PORT=5001`처럼 수정하거나 아래처럼 실행할 수 있습니다.
 
+### macOS / Linux
+
 ```bash
 PORT=5001 python3 app.py
+```
+
+### Windows PowerShell
+
+```powershell
+$env:PORT="5001"
+python app.py
+```
+
+### Windows CMD
+
+```cmd
+set PORT=5001
+python app.py
 ```
 
 앱을 종료하려면 터미널에서 `Ctrl + C`를 누릅니다.
