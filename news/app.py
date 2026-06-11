@@ -18,6 +18,7 @@ from flask_cors import CORS
 from analyzer import analyze_article, explain_external_candidates
 from crawler import fetch_article
 from recommender import recommend_articles
+from recommender_bnb import recommend_articles_bnb
 from searcher import search_related_articles
 
 
@@ -795,6 +796,11 @@ def analyze() -> tuple[dict, int] | tuple[object, int]:
     try:
         payload = request.get_json(silent=True) or {}
         url = str(payload.get("url", "")).strip()
+
+        recommender_mode = str(payload.get("recommender_mode", "classic")).strip().lower()
+        if recommender_mode not in {"classic", "bnb"}:
+            recommender_mode = "classic"
+
         validation_error = _validate_input_url(url)
         if validation_error:
             return jsonify({"message": validation_error, "tone": "caution"}), 400
@@ -804,7 +810,22 @@ def analyze() -> tuple[dict, int] | tuple[object, int]:
             return jsonify({"message": ARTICLE_EXTRACTION_FAILURE_MESSAGE, "tone": "caution"}), 422
 
         analysis = analyze_article(article)
-        recommendation_result = recommend_articles(article, analysis, limit=3)
+        if recommender_mode == "bnb":
+            recommendation_result = recommend_articles_bnb(article, analysis, limit=3)
+        else:
+            recommendation_result = recommend_articles(article, analysis, limit=3)
+            recommendation_result["recommendation_mode"] = "classic"
+            recommendation_result["bnb_meta"] = {
+                "mode": "classic",
+                "enabled": False,
+                "dataset": recommendation_result.get("tier", "unknown"),
+                "total_candidates": len(recommendation_result.get("articles", [])),
+                "branch_count": 0,
+                "evaluated_count": len(recommendation_result.get("articles", [])),
+                "skipped_count": 0,
+                "stop_reason": "classic_existing_recommender",
+                "optimality_gap": 0.0,
+            }
 
         external_candidates: list[dict] = []
         external_guidance: dict = {}
@@ -825,6 +846,7 @@ def analyze() -> tuple[dict, int] | tuple[object, int]:
                     "article": _serialize_article(article, analysis),
                     "analysis": _serialize_analysis(analysis),
                     "recommendations": recommendation_result,
+                    "recommender_mode": recommender_mode,
                     "external": {
                         "candidates": external_candidates,
                         "guidance": external_guidance,

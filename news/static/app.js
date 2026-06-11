@@ -1,5 +1,6 @@
 const analyzeForm = document.getElementById("analyzeForm");
 const newsUrlInput = document.getElementById("newsUrl");
+const recommenderModeInput = document.getElementById("recommenderMode");
 const analyzeBtn = document.getElementById("analyzeBtn");
 const loadingSection = document.getElementById("loading");
 const resultsSection = document.getElementById("results");
@@ -775,7 +776,10 @@ async function analyzeArticle(url) {
         const response = await fetch("/api/analyze", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url }),
+            body: JSON.stringify({
+                url,
+                recommender_mode: recommenderModeInput?.value || "classic",
+            }),
         });
 
         const data = await parseApiResponse(response);
