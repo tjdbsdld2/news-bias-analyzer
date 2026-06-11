@@ -35,6 +35,10 @@
                         <p class="ns-hero-lead">
                             기사 URL을 입력하면 AI가 핵심 프레임과 강조점을 분석하고, 같은 이슈의 다른 관점 기사까지 함께 보여줍니다.
                         </p>
+                        <div class="ns-hero-actions">
+                            <button type="button" class="ns-primary-btn ns-hero-btn" data-view="analyze">기사 분석 시작</button>
+                            <button type="button" class="ns-link-btn ns-ghost-btn ns-hero-btn" data-view="explore">이슈별 관점 보기</button>
+                        </div>
                         <div class="ns-hero-rail">
                             <div class="ns-hero-rail-item">
                                 <div class="ns-hero-rail-label">프레임 분석</div>
@@ -63,12 +67,23 @@
 
             <section id="view-analyze" class="ns-view hidden">
                 <section class="ns-page-panel ns-analyze-section">
-                    <div class="ns-section-header">
-                        <div class="ns-section-kicker">분석하기</div>
-                        <h2>기사 URL로 관점 분석하기</h2>
-                        <p class="ns-section-lead">
-                            뉴스 기사 URL을 입력하면 AI가 기사 속 프레임, 주요 목소리, 빠진 관점, 제목과 본문의 강조 차이를 분석합니다.
-                        </p>
+                    <div class="ns-view-hero ns-view-hero-analyze">
+                        <div class="ns-section-header">
+                            <div class="ns-section-kicker">분석하기</div>
+                            <h2>기사 URL로 관점 분석하기</h2>
+                            <p class="ns-section-lead">
+                                뉴스 기사 URL을 입력하면 AI가 기사 속 프레임, 주요 목소리, 빠진 관점, 제목과 본문의 강조 차이를 분석합니다.
+                            </p>
+                        </div>
+                        <aside class="ns-view-aside">
+                            <div class="ns-panel-kicker">Reading workflow</div>
+                            <h3 class="ns-view-aside-title">입력한 기사에서 먼저 짚어보는 세 가지</h3>
+                            <ul class="ns-view-aside-list">
+                                <li>무엇이 기사 첫머리에서 가장 크게 강조되는지 봅니다.</li>
+                                <li>누구의 말이 가장 설득력 있는 근거처럼 배치되는지 확인합니다.</li>
+                                <li>다른 관점 기사와 비교할 때 무엇을 함께 읽어야 하는지 정리합니다.</li>
+                            </ul>
+                        </aside>
                     </div>
 
                     <section class="ns-search-card">
@@ -134,6 +149,9 @@
                                 NewSight와 함께 같은 이슈를 서로 다른 관점의 기사로 비교해보세요.
                                 무엇이 강조되고, 누구의 목소리가 중심에 놓이며, 어떤 관점이 덜 다뤄졌는지 살펴보며 뉴스를 보는 힘을 기를 수 있습니다.
                             </p>
+                            <div id="exploreMeta" class="ns-explore-meta-row" aria-live="polite">
+                                <div class="ns-explore-meta-pill">검수 이슈 묶음 준비 중</div>
+                            </div>
                         </div>
                         <div class="ns-explore-feature-grid">
                             <article class="ns-explore-feature-card">

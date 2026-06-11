@@ -11,6 +11,7 @@ const statusBanner = document.getElementById("statusBanner");
 const viewButtons = Array.from(document.querySelectorAll("[data-view]"));
 const views = Array.from(document.querySelectorAll(".ns-view"));
 const exploreStatus = document.getElementById("exploreStatus");
+const exploreMeta = document.getElementById("exploreMeta");
 const exploreIssueList = document.getElementById("exploreIssueList");
 const exploreIssueDetail = document.getElementById("exploreIssueDetail");
 const exploreArticles = document.getElementById("exploreArticles");
@@ -589,6 +590,26 @@ function normalizeExploreIssue(issue = {}) {
     };
 }
 
+function renderExploreMeta() {
+    if (!exploreMeta) {
+        return;
+    }
+
+    if (!exploreIssues.length) {
+        exploreMeta.innerHTML = `<div class="ns-explore-meta-pill">검수 이슈 묶음 준비 중</div>`;
+        return;
+    }
+
+    const issueCount = exploreIssues.length;
+    const articleCount = exploreIssues.reduce((total, issue) => total + (issue.articles?.length || 0), 0);
+
+    exploreMeta.innerHTML = `
+        <div class="ns-explore-meta-pill">핵심 이슈 ${issueCount}개</div>
+        <div class="ns-explore-meta-pill">검수 기사 ${articleCount}개</div>
+        <div class="ns-explore-meta-pill">비교 읽기용 설명 포함</div>
+    `;
+}
+
 function renderExploreIssueButtons() {
     if (!exploreIssueList) {
         return;
@@ -612,8 +633,11 @@ function renderExploreIssueButtons() {
                     data-issue-index="${index}"
                     aria-pressed="${index === activeExploreIndex ? "true" : "false"}"
                 >
-                    <span class="ns-issue-button-label">${escapeHtml(issue.issue)}</span>
-                    <span class="ns-issue-button-meta">${escapeHtml(`${issue.articles.length}개 관점 기사`)}</span>
+                    <span class="ns-issue-button-top">
+                        <span class="ns-issue-button-label">${escapeHtml(issue.issue)}</span>
+                        <span class="ns-issue-button-count">${escapeHtml(String(issue.articles.length))}</span>
+                    </span>
+                    <span class="ns-issue-button-meta">${escapeHtml("관점별 비교 기사 묶음")}</span>
                 </button>
             `
         )
@@ -700,6 +724,8 @@ function renderExploreArticleCards(issue) {
 }
 
 function renderExplorePanel() {
+    renderExploreMeta();
+
     if (!exploreIssues.length) {
         renderExploreIssueDetail(null);
         renderExploreArticleCards(null);
