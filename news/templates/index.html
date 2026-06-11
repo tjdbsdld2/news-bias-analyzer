@@ -6,7 +6,7 @@
     <title>NewSight | 뉴스를 더 넓게 읽다</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
@@ -59,7 +59,7 @@
                         <ul>
                             <li>기사에서 어떤 주체와 쟁점이 중심에 놓였는지 확인합니다.</li>
                             <li>문장별 보조 메모를 통해 문장의 역할과 강조점을 빠르게 짚어봅니다.</li>
-                            <li>검수 DB와 확장 DB를 바탕으로 비교 기사를 추천합니다.</li>
+                            <li>관점 비교를 돕는 기사 예시와 추천 후보를 함께 살펴볼 수 있습니다.</li>
                         </ul>
                     </aside>
                 </section>
@@ -135,28 +135,31 @@
             <section id="view-explore" class="ns-view hidden">
                 <section class="ns-page-panel ns-explore-section">
                     <div class="ns-section-header">
-                        <div class="ns-section-kicker">이슈별 관점 보기</div>
-                        <h2>이슈별 관점 보기</h2>
+                        <div class="ns-section-kicker">관점 비교 연습</div>
+                        <h2>뉴스를 보는 힘을 기르다</h2>
                         <p class="ns-section-lead">
-                            검수된 기사 묶음을 통해 같은 이슈가 어떤 관점으로 다르게 보도되는지 비교해보세요.
+                            하나의 이슈를 여러 시선으로 읽어보세요.
                         </p>
                     </div>
                     <section class="ns-explore-intro">
                         <div class="ns-explore-intro-copy">
-                            <div class="ns-panel-kicker">같은 이슈, 다른 시선</div>
-                            <h3 class="ns-explore-intro-title">같은 이슈, 다른 시선</h3>
+                            <div class="ns-panel-kicker">이슈별 관점 보기</div>
+                            <h3 class="ns-explore-intro-title">하나의 이슈를 여러 시선으로 읽기</h3>
                             <p class="ns-explore-intro-body">
-                                NewSight와 함께 같은 이슈를 서로 다른 관점의 기사로 비교해보세요.
-                                무엇이 강조되고, 누구의 목소리가 중심에 놓이며, 어떤 관점이 덜 다뤄졌는지 살펴보며 뉴스를 보는 힘을 기를 수 있습니다.
+                                NewSight는 예시 기사 데이터를 바탕으로 같은 이슈가 서로 다른 관점에서 어떻게 다루어질 수 있는지 보여줍니다.
+                                무엇이 강조되고, 누구의 목소리가 중심에 놓이며, 어떤 관점이 덜 다뤄졌는지 비교하며 뉴스를 더 넓게 읽는 연습을 할 수 있습니다.
                             </p>
+                            <div class="ns-explore-note">
+                                이 화면은 시연을 위해 미리 정리한 기사 예시를 바탕으로 구성됩니다.
+                            </div>
                             <div id="exploreMeta" class="ns-explore-meta-row" aria-live="polite">
-                                <div class="ns-explore-meta-pill">검수 이슈 묶음 준비 중</div>
+                                <div class="ns-explore-meta-pill">예시 기사 데이터 준비 중</div>
                             </div>
                         </div>
                         <div class="ns-explore-feature-grid">
                             <article class="ns-explore-feature-card">
-                                <div class="ns-card-title">관점별 기사 묶음</div>
-                                <p class="ns-card-copy">같은 이슈를 서로 다른 프레임으로 다룬 기사들을 모아 보여줍니다.</p>
+                                <div class="ns-card-title">예시 기사 묶음</div>
+                                <p class="ns-card-copy">같은 이슈를 서로 다른 관점으로 다룬 기사 예시를 모아 보여줍니다.</p>
                             </article>
                             <article class="ns-explore-feature-card">
                                 <div class="ns-card-title">비교해서 읽기</div>
@@ -183,27 +186,27 @@
                 <section class="ns-page-panel ns-static-section">
                     <div class="ns-section-header">
                         <div class="ns-section-kicker">분석 기준</div>
-                        <h2>같은 사실도 다르게 읽힐 수 있습니다</h2>
+                        <h2>기사를 다르게 읽는 세 가지 기준</h2>
                         <p class="ns-section-lead">
-                            뉴스는 사실을 전달하지만, 어떤 쟁점을 먼저 보여주고 누구의 말을 인용하며 어떤 관점을 생략하는지에 따라 독자가 사건을 이해하는 방식은 달라질 수 있습니다.
+                            뉴스는 같은 사실을 다루더라도 무엇을 먼저 보여주고, 누구의 말을 중심에 두며, 어떤 관점을 덜 다루는지에 따라 전혀 다른 방향으로 읽힐 수 있습니다.
                         </p>
                     </div>
                     <div class="ns-static-grid">
                         <article class="ns-static-card">
-                            <div class="ns-card-title">무엇을 먼저 보여주는가</div>
-                            <p class="ns-card-copy">제목과 첫 문장은 독자가 사건을 처음 받아들이는 방향을 만듭니다.</p>
+                            <div class="ns-card-title">무엇이 강조되는가</div>
+                            <p class="ns-card-copy">제목, 첫 문장, 반복 표현을 통해 기사가 어떤 쟁점을 먼저 보여주는지 확인합니다.</p>
                         </article>
                         <article class="ns-static-card">
-                            <div class="ns-card-title">누구의 말을 중심에 두는가</div>
-                            <p class="ns-card-copy">공식 정보원, 전문가, 당사자, 시민 중 누구의 목소리가 중심에 놓이는지에 따라 기사 흐름이 달라집니다.</p>
+                            <div class="ns-card-title">누구의 말이 중심인가</div>
+                            <p class="ns-card-copy">정부, 기업, 전문가, 시민, 피해자 중 누구의 목소리가 기사 흐름을 이끄는지 살펴봅니다.</p>
                         </article>
                         <article class="ns-static-card">
-                            <div class="ns-card-title">무엇이 빠져 있는가</div>
-                            <p class="ns-card-copy">한 기사만으로는 덜 보이는 이해관계자나 반대 관점이 있을 수 있습니다.</p>
+                            <div class="ns-card-title">무엇이 덜 다뤄지는가</div>
+                            <p class="ns-card-copy">한 기사만으로는 보이지 않는 이해관계자나 반대 관점이 있는지 확인합니다.</p>
                         </article>
                         <article class="ns-static-card">
-                            <div class="ns-card-title">같은 이슈를 어떻게 다르게 다루는가</div>
-                            <p class="ns-card-copy">같은 사건이라도 소비자 편익, 기업 부담, 노동자 권리, 정책 정당성 등 서로 다른 프레임으로 설명될 수 있습니다.</p>
+                            <div class="ns-card-title">어떤 기사와 함께 읽을 것인가</div>
+                            <p class="ns-card-copy">하나의 기사만으로 결론 내리지 않고, 같은 이슈를 다른 프레임으로 다룬 기사와 함께 읽습니다.</p>
                         </article>
                     </div>
                 </section>

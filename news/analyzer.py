@@ -58,8 +58,7 @@ DEFAULT_ANALYSIS = {
 }
 
 DEFAULT_EXTERNAL_GUIDANCE_NOTE = (
-    "현재 DB에는 직접 대응되는 비교 기사가 없어, 같은 이슈를 다룰 가능성이 있는 외부 기사 후보를 함께 제시합니다. "
-    "아래 기사들은 확정된 반대 프레임 추천이 아니라 추가로 비교해볼 만한 읽기 후보입니다."
+    "로컬 예시 데이터에서 바로 연결되는 기사를 찾지 못해, 같은 이슈를 넓게 살펴볼 수 있는 관련 기사를 함께 보여드립니다."
 )
 SUPPORTED_LLM_KEY_TEXT = (
     "GOOGLE_API_KEY 또는 GEMINI_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY 또는 ANTHROPIC_API_KEY"
@@ -152,7 +151,7 @@ def _normalize_reading_highlights(value: Any) -> list[dict[str, str]]:
         return []
 
     normalized: list[dict[str, str]] = []
-    for item in value[:5]:
+    for item in value[:3]:
         if not isinstance(item, dict):
             continue
 
@@ -817,7 +816,7 @@ def _default_compare_point(analysis: dict[str, Any]) -> str:
     missing_perspective = str(analysis.get("missing_perspective", "")).strip()
     if missing_perspective:
         return missing_perspective
-    return "입력 기사에서 덜 다뤄진 이해관계자, 근거, 정책 효과를 함께 비교해보세요."
+    return "입력 기사에서 덜 다뤄진 이해관계자, 근거, 정책 효과가 어떻게 보완되는지 함께 비교해보세요."
 
 
 def _build_mock_external_guidance(
@@ -835,7 +834,7 @@ def _build_mock_external_guidance(
         guidance_candidates.append(
             {
                 "title": title,
-                "why_relevant": f"'{title}' 기사는 {tag_text}와 관련된 외부 기사 후보로 검색되어 {source}의 시선을 추가로 확인하는 데 도움이 될 수 있습니다.",
+                "why_relevant": f"이 기사는 {tag_text}를 함께 다루면서 {source}의 시선을 중심에 둡니다. 입력 기사와 나란히 읽으면 같은 사안을 어떤 목소리와 강조점으로 설명하는지 비교해볼 수 있습니다.",
                 "what_to_compare": compare_point,
             }
         )
@@ -861,9 +860,9 @@ def _normalize_external_guidance(payload: dict[str, Any], candidates: list[dict]
             {
                 "title": candidate.get("title", "후보 기사"),
                 "why_relevant": str(raw_item.get("why_relevant", "")).strip()
-                or f"'{candidate.get('title', '후보 기사')}' 기사는 입력 기사와 연관된 주제를 다룰 가능성이 있어 비교 후보로 제시되었습니다.",
+                or "이 기사와 함께 읽으면 같은 이슈를 다른 이해관계자의 관점에서 어떻게 설명하는지 비교해볼 수 있습니다.",
                 "what_to_compare": str(raw_item.get("what_to_compare", "")).strip()
-                or "입력 기사에서 덜 다뤄진 이해관계자, 근거, 강조점을 함께 비교해보세요.",
+                or "입력 기사에서 덜 다뤄진 이해관계자, 근거, 강조점이 어떻게 달라지는지 함께 비교해보세요.",
             }
         )
 

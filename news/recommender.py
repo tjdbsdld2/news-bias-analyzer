@@ -8,6 +8,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from difflib import SequenceMatcher
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -225,6 +226,13 @@ def _sub_issue_difference_score(query_text: str, candidate_sub_issue: str) -> in
     return 1 if normalized_sub_issue not in _compact(query_text) else 0
 
 
+def _title_similarity(left: str, right: str) -> float:
+    """Measure normalized title similarity for filtering near-duplicates."""
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
 def _build_candidates(
     article: dict | None,
     analysis: dict,
@@ -239,6 +247,8 @@ def _build_candidates(
     query_tags = _split_tags(analysis.get("issue_tags", []))
     query_frame = _compact(analysis.get("frame", ""))
     query_voice = str(analysis.get("primary_voice", "")).strip()
+    query_issue = str(analysis.get("issue", "")).strip()
+    query_sub_issue = str(analysis.get("sub_issue", "")).strip()
     query_text_tags, query_text = _query_context(article, analysis)
     normalized_query_tags = {_compact(tag) for tag in query_tags + query_text_tags if _compact(tag)}
 
@@ -255,31 +265,45 @@ def _build_candidates(
         candidate_frame = _compact(row.get("frame", ""))
         candidate_tags = _split_tags(row.get("issue_tags", ""))
         normalized_candidate_tags = {_compact(tag) for tag in candidate_tags if _compact(tag)}
+        candidate_issue = str(row.get("issue", "")).strip()
+        candidate_sub_issue = str(row.get("sub_issue", "")).strip()
 
         if input_url and candidate_url == input_url:
             continue
         if input_title and candidate_title == input_title:
             continue
-        if query_frame and candidate_frame == query_frame:
-            continue
 
         overlap = sorted(normalized_query_tags.intersection(normalized_candidate_tags))
         overlap_count = len(overlap)
         specific_overlap_count = _specific_tag_overlap_count(normalized_query_tags, normalized_candidate_tags)
-        issue_score = _issue_match_score(row.get("issue", ""), query_text)
+        issue_score = _issue_match_score(candidate_issue, query_text)
+        issue_exact_match = 1 if query_issue and _compact(query_issue) == _compact(candidate_issue) else 0
+        voice_difference = _voice_difference_score(query_voice, row.get("primary_voice", ""))
+        sub_issue_difference = _sub_issue_difference_score(query_text, candidate_sub_issue)
+        title_similarity = _title_similarity(input_title, candidate_title)
+
+        compare_signal = voice_difference + sub_issue_difference + (1 if query_frame and candidate_frame and candidate_frame != query_frame else 0)
+        if query_frame and candidate_frame == query_frame and compare_signal <= 0:
+            continue
 
         min_specific_overlap = 2 if dataset_name == "curated" else 3
-        if issue_score <= 0 and specific_overlap_count < min_specific_overlap:
+        if issue_exact_match == 0 and issue_score <= 0 and specific_overlap_count < min_specific_overlap:
+            continue
+        if overlap_count == 0 and issue_score < 2 and issue_exact_match == 0:
+            continue
+        if title_similarity >= 0.82 and issue_exact_match == 0 and issue_score <= 0 and specific_overlap_count < (min_specific_overlap + 1):
             continue
 
         score = (
+            issue_exact_match,
             1 if issue_score > 0 else 0,
             specific_overlap_count,
             issue_score,
-            _voice_difference_score(query_voice, row.get("primary_voice", "")),
-            _sub_issue_difference_score(query_text, row.get("sub_issue", "")),
+            1 if query_frame and candidate_frame and candidate_frame != query_frame else 0,
+            voice_difference,
+            sub_issue_difference,
             _status_score(row),
-            len((row.get("body_excerpt") or "").strip()),
+            len((row.get("memo") or "").strip()),
         )
         scored.append(
             (
@@ -313,9 +337,9 @@ def recommend_articles(article: dict | None, analysis: dict, limit: int = 3) -> 
     if curated_candidates:
         return {
             "tier": "curated",
-            "heading": "다른 관점 기사",
-            "caption": "같은 이슈를 다른 강조점이나 다른 중심 주체로 읽게 하는 기사를 먼저 골랐습니다.",
-            "notice": _dataset_notice("curated"),
+            "heading": "함께 비교해볼 기사",
+            "caption": "같은 이슈를 다루지만 다른 쟁점, 다른 목소리, 다른 관점이 드러나는 기사를 함께 살펴볼 수 있습니다.",
+            "notice": "",
             "articles": curated_candidates,
         }
 
@@ -323,9 +347,9 @@ def recommend_articles(article: dict | None, analysis: dict, limit: int = 3) -> 
     if expanded_candidates:
         return {
             "tier": "expanded",
-            "heading": "관련 관점 기사",
-            "caption": "입력 기사와 비슷한 쟁점을 다른 강조점이나 다른 인용 중심으로 다루는 기사를 골랐습니다.",
-            "notice": _dataset_notice("expanded") or _dataset_notice("curated"),
+            "heading": "함께 비교해볼 기사",
+            "caption": "같은 이슈를 다루지만 다른 쟁점, 다른 목소리, 다른 관점이 드러나는 기사를 함께 살펴볼 수 있습니다.",
+            "notice": "",
             "articles": expanded_candidates,
         }
 
@@ -333,7 +357,7 @@ def recommend_articles(article: dict | None, analysis: dict, limit: int = 3) -> 
         "tier": "none",
         "heading": "",
         "caption": "",
-        "notice": _dataset_notice("curated") or _dataset_notice("expanded"),
+        "notice": "",
         "articles": [],
     }
 

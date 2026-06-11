@@ -452,7 +452,7 @@ function renderRecommendationCards(recommendations) {
                             ? `<div class="ns-rec-guide"><strong>왜 같이 보면 좋은가</strong><p>${escapeHtml(rec.memo)}</p></div>`
                             : ""
                     }
-                    <a class="ns-link-btn" href="${escapeHtml(rec.url || "#")}" target="_blank" rel="noopener noreferrer">기사 보러 가기</a>
+                    <a class="ns-link-btn" href="${escapeHtml(rec.url || "#")}" target="_blank" rel="noopener noreferrer">기사 원문 보기</a>
                 </article>
             `;
         })
@@ -485,7 +485,7 @@ function renderExternalCards(candidates = [], guidance = {}) {
                             ? `<div class="ns-inline-note"><strong>검색 요약</strong> ${escapeHtml(candidate.snippet)}</div>`
                             : ""
                     }
-                    <a class="ns-link-btn" href="${escapeHtml(candidate.url || "#")}" target="_blank" rel="noopener noreferrer">후보 기사 보러 가기</a>
+                    <a class="ns-link-btn" href="${escapeHtml(candidate.url || "#")}" target="_blank" rel="noopener noreferrer">기사 원문 보기</a>
                 </article>
             `;
         })
@@ -494,38 +494,22 @@ function renderExternalCards(candidates = [], guidance = {}) {
 
 function renderRecommendationSection(result, external) {
     const articles = result?.articles || [];
-    const tier = result?.tier || "none";
-    const recommendationNotice = result?.notice || "";
     const externalMessage = external?.message || "";
 
     if (articles.length > 0) {
-        const heading = result.heading || "다른 관점 추천 기사";
-        const caption = result.caption || "";
-        const tierLabel = tier === "curated" ? "검수 기반 추천" : "";
-        const supplementalNote =
-            tier === "expanded"
-                ? "자동 수집 기사와 자동 태깅 결과를 바탕으로 고른 보조 추천입니다."
-                : "";
+        const heading = result.heading || "함께 비교해볼 기사";
+        const caption =
+            result.caption ||
+            "같은 이슈를 다루지만 다른 쟁점, 다른 목소리, 다른 관점이 드러나는 기사를 함께 살펴볼 수 있습니다.";
 
         recommendationSection.innerHTML = `
             <div class="ns-reco-shell">
-                ${tierLabel ? `<div class="ns-reco-tier-pill">${escapeHtml(tierLabel)}</div>` : ""}
                 <h2 class="ns-reco-headline">${escapeHtml(heading)}</h2>
                 <p class="ns-reco-caption">${escapeHtml(caption)}</p>
             </div>
             <div class="ns-reco-list">
                 ${renderRecommendationCards(articles)}
             </div>
-            ${
-                supplementalNote
-                    ? `<div class="ns-inline-note">${escapeHtml(supplementalNote)}</div>`
-                    : ""
-            }
-            ${
-                recommendationNotice
-                    ? `<div class="ns-inline-note">${escapeHtml(recommendationNotice)}</div>`
-                    : ""
-            }
         `;
         return;
     }
@@ -535,9 +519,8 @@ function renderRecommendationSection(result, external) {
 
     recommendationSection.innerHTML = `
         <div class="ns-reco-shell">
-            <div class="ns-reco-tier-pill">외부 탐색</div>
-            <h2 class="ns-reco-headline">함께 볼 기사</h2>
-            <p class="ns-reco-caption">로컬 추천 DB에서 바로 연결되는 기사를 찾지 못해, 같은 주제를 넓게 살펴볼 수 있는 외부 기사를 모았습니다.</p>
+            <h2 class="ns-reco-headline">함께 비교해볼 기사</h2>
+            <p class="ns-reco-caption">같은 이슈를 다루지만 다른 쟁점, 다른 목소리, 다른 관점이 드러나는 기사를 함께 살펴볼 수 있습니다.</p>
         </div>
         ${
             guidance?.overall_note
@@ -552,11 +535,6 @@ function renderRecommendationSection(result, external) {
         ${
             guidance?.explanation_notice
                 ? `<div class="ns-inline-note">${escapeHtml(guidance.explanation_notice)}</div>`
-                : ""
-        }
-        ${
-            recommendationNotice && candidates.length > 0
-                ? `<div class="ns-inline-note">${escapeHtml(recommendationNotice)}</div>`
                 : ""
         }
         ${
@@ -596,7 +574,7 @@ function renderExploreMeta() {
     }
 
     if (!exploreIssues.length) {
-        exploreMeta.innerHTML = `<div class="ns-explore-meta-pill">검수 이슈 묶음 준비 중</div>`;
+        exploreMeta.innerHTML = `<div class="ns-explore-meta-pill">예시 기사 데이터 준비 중</div>`;
         return;
     }
 
@@ -604,9 +582,9 @@ function renderExploreMeta() {
     const articleCount = exploreIssues.reduce((total, issue) => total + (issue.articles?.length || 0), 0);
 
     exploreMeta.innerHTML = `
-        <div class="ns-explore-meta-pill">핵심 이슈 ${issueCount}개</div>
-        <div class="ns-explore-meta-pill">검수 기사 ${articleCount}개</div>
-        <div class="ns-explore-meta-pill">비교 읽기용 설명 포함</div>
+        <div class="ns-explore-meta-pill">예시 이슈 ${issueCount}개</div>
+        <div class="ns-explore-meta-pill">기사 예시 ${articleCount}개</div>
+        <div class="ns-explore-meta-pill">관점 비교 연습용 설명 포함</div>
     `;
 }
 
@@ -750,7 +728,7 @@ async function ensureExploreLoaded() {
         return exploreLoadingPromise;
     }
 
-    setExploreStatus("이슈별 관점 보기 데이터를 불러오는 중입니다.");
+    setExploreStatus("예시 기사 데이터를 불러오는 중입니다.");
     exploreLoadingPromise = (async () => {
         try {
             const response = await fetch("/api/explore");
@@ -762,13 +740,13 @@ async function ensureExploreLoaded() {
 
             if (!response.ok || !payload.ok || !exploreIssues.length) {
                 renderExplorePanel();
-                setExploreStatus(payload.message || "이슈별 관점 보기 데이터를 불러오지 못했습니다.", "caution");
+                setExploreStatus(payload.message || "예시 기사 데이터를 불러오지 못했습니다.", "caution");
                 return exploreIssues;
             }
 
             activeExploreIndex = 0;
             renderExplorePanel();
-            setExploreStatus("검수된 기사 묶음을 불러왔습니다. 이슈를 선택해 관점 차이를 비교해 보세요.");
+            setExploreStatus("이슈를 선택해 관점별 기사 차이를 비교해보세요.");
             return exploreIssues;
         } catch (error) {
             exploreIssues = [];
@@ -776,8 +754,8 @@ async function ensureExploreLoaded() {
             const rawMessage = error?.message || "";
             const friendlyMessage =
                 /Failed to fetch|NetworkError|Load failed/i.test(rawMessage)
-                    ? "이슈별 관점 보기 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."
-                    : rawMessage || "이슈별 관점 보기 데이터를 불러오지 못했습니다.";
+                    ? "예시 기사 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."
+                    : rawMessage || "예시 기사 데이터를 불러오지 못했습니다.";
             setExploreStatus(friendlyMessage, "caution");
             return exploreIssues;
         } finally {

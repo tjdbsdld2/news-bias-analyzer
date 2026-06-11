@@ -78,6 +78,10 @@ HIGHLIGHT_RULES = [
     ),
 ]
 
+ATTRIBUTION_VERB_PATTERN = re.compile(
+    r"밝혔(?:다|습니다)?|설명했(?:다|습니다)?|말했(?:다|습니다)?|주장했(?:다|습니다)?|전했다|강조했(?:다|습니다)?|사과했(?:다|습니다)?|촉구했(?:다|습니다)?"
+)
+
 CAUTION_GROUPS = {
     "갈등 쟁점": {"논란", "반발", "비판", "공방", "봉쇄", "충돌", "강행"},
     "책임 쟁점": {"책임", "사과", "실패", "무효", "사퇴", "진상규명"},
@@ -93,14 +97,15 @@ KEY_ACTION_PATTERN = re.compile(
 ANNOTATED_SENTENCE_LIMIT = 20
 BODY_REST_CHAR_LIMIT = 900
 HIGHLIGHT_MATCH_THRESHOLD = 0.84
+MAX_VISIBLE_READING_NOTES = 5
 VALID_URL_MESSAGE = "올바른 뉴스 기사 URL을 입력해 주세요. 예: https://..."
 ARTICLE_EXTRACTION_FAILURE_MESSAGE = (
     "기사 본문을 충분히 추출하지 못했습니다. 언론사 원문 링크를 입력하거나 다른 기사 URL로 다시 시도해 주세요."
 )
 NO_RECOMMENDATION_MESSAGE = (
-    "현재 로컬 DB와 외부 검색에서 비교할 만한 기사 후보를 찾지 못했습니다. 다른 기사 URL로 다시 시도해 주세요."
+    "지금은 함께 비교해볼 기사를 찾지 못했습니다. 다른 기사 URL로 다시 시도해 주세요."
 )
-EXTERNAL_SEARCH_FAILURE_MESSAGE = "외부 관련 기사 후보를 찾지 못했습니다."
+EXTERNAL_SEARCH_FAILURE_MESSAGE = "같은 이슈를 넓게 살펴볼 수 있는 관련 기사를 찾지 못했습니다."
 EVIDENCE_CUE_PATTERN = re.compile(
     r"자료|통계|조사|집계|보고서|설문|발표|공시|백서|브리핑|기자회견|질의응답|전망|예상|전했다|밝혔다|설명했다|따르면"
 )
@@ -108,6 +113,9 @@ LIST_LIKE_MARKER_PATTERN = re.compile(
     r"등이\s*(?:참가|참석|배석|만난다|만날\s*예정)|비롯해|잇달아\s*찾아|주요\s*경영진|참가한다|참석한다"
 )
 DIRECT_QUOTE_PATTERN = re.compile(r"[\"“][^\"”]{2,120}[\"”]")
+SCHEDULE_MARKER_PATTERN = re.compile(
+    r"방문|찾아|만난다|만날\s*예정|회동|참석|참여|일정|오전|오후|이후|같은\s*날|예정이다|이어간다"
+)
 
 
 def _validate_input_url(url: str) -> str | None:
@@ -185,36 +193,15 @@ def _find_caution_term(sentence: str) -> str | None:
     return match.group(0) if match else None
 
 
-def _build_body_focus_note(labels: list[str], custom_focus: str = "") -> str:
-    """Summarize what kinds of highlighted sentences the reader should pay attention to."""
-    if custom_focus:
-        return custom_focus
-
-    if not labels:
-        return "표시된 문장은 기사 방향을 크게 정하는 부분입니다. 초반 핵심 서술, 근거 제시, 관점 전환 문장을 중심으로 비교해 보세요."
-
-    ordered: list[str] = []
-    for label in labels:
-        if label not in ordered:
-            ordered.append(label)
-
-    mapping = {
-        "핵심 주장": "기사의 결론이나 조치가 드러나는 문장",
-        "핵심 서술": "기사 초반의 문제 설정 문장",
-        "직접 발화": "누가 어떤 표현을 직접 말했는지 보여주는 문장",
-        "주장 전달": "특정 주체의 설명이 실리는 문장",
-        "관점 전환": "반면, 한편처럼 흐름이 바뀌는 문장",
-        "근거 제시": "수치나 사례로 주장을 받치는 문장",
-        "갈등 쟁점": "대립이나 충돌을 크게 보이게 하는 문장",
-        "책임 쟁점": "책임 소재를 읽게 하는 문장",
-        "피해 관점": "손실이나 피해를 앞세우는 문장",
-        "출처 흐림": "판단 주체가 흐려지는 문장",
-    }
-    fragments = [mapping[label] for label in ordered[:3] if label in mapping]
-    if not fragments:
-        return "표시된 문장은 기사 방향을 크게 정하는 부분입니다. 초반 핵심 서술, 근거 제시, 관점 전환 문장을 중심으로 비교해 보세요."
-
-    return f"표시된 문장은 기사 방향을 크게 정하는 부분입니다. 특히 {' / '.join(fragments)}을 중심으로 읽어보면 도움이 됩니다."
+def _tip_lens_key(label: str, sentence: str = "") -> str:
+    """Map sentence notes to the same reading lenses used in the overview cards."""
+    if label in {"직접 발화", "주장 전달", "출처 흐림"}:
+        return "voice"
+    if label == "근거 제시" and (
+        DIRECT_QUOTE_PATTERN.search(sentence) or ATTRIBUTION_VERB_PATTERN.search(sentence)
+    ):
+        return "voice"
+    return "emphasis"
 
 
 def _compact_sentence(text: str) -> str:
@@ -297,6 +284,11 @@ def _looks_like_entity_list(sentence: str) -> bool:
     return role_word_hits >= 3
 
 
+def _looks_like_schedule_update(sentence: str) -> bool:
+    """Detect schedule or movement updates that rarely need a reading note on their own."""
+    return bool(DATE_TIME_PATTERN.search(sentence) and SCHEDULE_MARKER_PATTERN.search(sentence))
+
+
 def _is_actionable_llm_highlight(sentence: str, role: str, note: str) -> bool:
     """Keep only LLM highlights that feel like real reading aids, not stray lists."""
     compact = sentence.strip()
@@ -310,6 +302,10 @@ def _is_actionable_llm_highlight(sentence: str, role: str, note: str) -> bool:
     has_key_action = bool(KEY_ACTION_PATTERN.search(compact))
     has_evidence_cue = bool(EVIDENCE_CUE_PATTERN.search(compact))
     looks_like_list = _looks_like_entity_list(compact)
+    looks_like_schedule = _looks_like_schedule_update(compact)
+
+    if looks_like_schedule and not (has_quote or has_metric or has_caution or has_contrast):
+        return False
 
     if role == "직접 발화":
         return has_quote
@@ -325,6 +321,8 @@ def _is_actionable_llm_highlight(sentence: str, role: str, note: str) -> bool:
     if role in {"핵심 주장", "핵심 서술"}:
         if looks_like_list and not (has_key_action or has_caution or has_quote):
             return False
+        if looks_like_schedule and not (has_caution or has_quote or has_metric):
+            return False
         return has_key_action or has_caution or has_quote or has_metric or len(note.strip()) >= 24
 
     if role in {"갈등 쟁점", "책임 쟁점", "피해 관점", "주의 표현"}:
@@ -336,13 +334,153 @@ def _is_actionable_llm_highlight(sentence: str, role: str, note: str) -> bool:
     return not looks_like_list
 
 
+def _tip_base_score(label: str) -> float:
+    """Give more weight to sentence roles that usually help comparison reading most."""
+    return {
+        "핵심 주장": 6.0,
+        "핵심 서술": 5.2,
+        "직접 발화": 5.1,
+        "관점 전환": 5.0,
+        "근거 제시": 4.8,
+        "주장 전달": 4.2,
+        "갈등 쟁점": 4.0,
+        "책임 쟁점": 4.0,
+        "피해 관점": 4.0,
+        "주의 표현": 3.8,
+        "출처 흐림": 3.2,
+    }.get(label, 3.0)
+
+
+def _tip_score(
+    sentence: str,
+    tip: tuple[str, str],
+    sentence_index: int,
+    *,
+    is_llm_tip: bool,
+) -> float:
+    """Score reading-note candidates so only genuinely useful ones remain visible."""
+    label, note = tip
+    compact = sentence.strip()
+
+    score = _tip_base_score(label)
+    if is_llm_tip:
+        score += 1.1
+
+    if sentence_index < 2:
+        score += 0.8
+    elif sentence_index < 5:
+        score += 0.35
+
+    if DIRECT_QUOTE_PATTERN.search(compact):
+        score += 1.2
+    if _find_significant_metric(compact):
+        score += 1.1
+    if _find_caution_term(compact):
+        score += 1.0
+    if re.search(r"반면|하지만|그러나|다만|한편", compact):
+        score += 1.1
+    if KEY_ACTION_PATTERN.search(compact):
+        score += 1.1
+    if EVIDENCE_CUE_PATTERN.search(compact):
+        score += 0.9
+
+    if _looks_like_entity_list(compact):
+        score -= 3.4
+    if _looks_like_schedule_update(compact):
+        score -= 2.6
+    if len(compact) > 150 and not DIRECT_QUOTE_PATTERN.search(compact):
+        score -= 0.6
+    if len(note.strip()) < 20:
+        score -= 0.7
+
+    return score
+
+
+def _tip_role_cap(label: str) -> int:
+    """Limit repeated notes of the same role to keep the preview diverse."""
+    if label == "근거 제시":
+        return 2
+    return 1
+
+
+def _select_visible_reading_tips(
+    sentences: list[str],
+    assigned_tips: list[tuple[str, str] | None],
+    llm_highlight_map: dict[int, tuple[str, str]],
+) -> list[tuple[str, str] | None]:
+    """Filter sentence tips down to a small set of genuinely useful reading notes."""
+    candidates: list[tuple[float, bool, int, tuple[str, str]]] = []
+    for index, (sentence, tip) in enumerate(zip(sentences, assigned_tips)):
+        if tip is None:
+            continue
+        is_llm_tip = index in llm_highlight_map
+        score = _tip_score(sentence, tip, index, is_llm_tip=is_llm_tip)
+        candidates.append((score, is_llm_tip, index, tip))
+
+    if not candidates:
+        return assigned_tips
+
+    candidates.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
+
+    filtered: list[tuple[str, str] | None] = [None] * len(sentences)
+    selected_count = 0
+    role_counts: dict[str, int] = {}
+    lens_counts: dict[str, int] = {}
+    target_count = min(MAX_VISIBLE_READING_NOTES, max(3, len(llm_highlight_map) + 2))
+
+    def can_select(score: float, is_llm_tip: bool) -> bool:
+        if is_llm_tip:
+            return score > 0
+        return score >= 4.7
+
+    def try_select(
+        score: float,
+        is_llm_tip: bool,
+        index: int,
+        tip: tuple[str, str],
+    ) -> bool:
+        nonlocal selected_count
+        label, _ = tip
+        if not can_select(score, is_llm_tip):
+            return False
+        if filtered[index] is not None:
+            return False
+        if role_counts.get(label, 0) >= _tip_role_cap(label):
+            return False
+
+        lens_key = _tip_lens_key(label, sentences[index])
+        filtered[index] = tip
+        role_counts[label] = role_counts.get(label, 0) + 1
+        lens_counts[lens_key] = lens_counts.get(lens_key, 0) + 1
+        selected_count += 1
+        return True
+
+    for desired_lens in ("emphasis", "voice"):
+        for score, is_llm_tip, index, tip in candidates:
+            label, _ = tip
+            if _tip_lens_key(label, sentences[index]) != desired_lens:
+                continue
+            if try_select(score, is_llm_tip, index, tip):
+                break
+
+    for score, is_llm_tip, index, tip in candidates:
+        if try_select(score, is_llm_tip, index, tip):
+            pass
+        if selected_count >= target_count:
+            break
+
+    if selected_count == 0:
+        best_score, _, best_index, best_tip = candidates[0]
+        if best_score > 0:
+            filtered[best_index] = best_tip
+
+    return filtered
+
+
 def _sentence_tooltip(sentence: str, sentence_index: int = 0) -> tuple[str, str] | None:
     """Generate a label and a short hover explanation for one sentence."""
     quote_match = re.search(r"[\"“][^\"”]{2,120}[\"”]", sentence)
-    attribution_match = re.search(
-        r"밝혔(?:다|습니다)?|설명했(?:다|습니다)?|말했(?:다|습니다)?|주장했(?:다|습니다)?|전했다|강조했(?:다|습니다)?|사과했(?:다|습니다)?|촉구했(?:다|습니다)?",
-        sentence,
-    )
+    attribution_match = ATTRIBUTION_VERB_PATTERN.search(sentence)
     vague_match = re.search(r"지적된다|우려된다", sentence)
     contrast_match = re.search(r"반면|하지만|그러나|다만|한편", sentence)
     key_action_match = KEY_ACTION_PATTERN.search(sentence)
@@ -376,7 +514,7 @@ def _sentence_tooltip(sentence: str, sentence_index: int = 0) -> tuple[str, str]
         verb = attribution_match.group(0)
         return (
             "주장 전달",
-            f"'{verb}'처럼 누군가의 설명을 전달하는 문장입니다. 같은 사안에서 다른 주체의 설명도 비슷한 비중으로 실리는지 비교해 보세요.",
+            f"'{verb}'처럼 누군가의 설명을 전달하는 문장입니다. 이 문장을 기준으로 누구의 말이 기사 흐름을 이끄는지, 다른 주체의 설명은 얼마나 뒤로 밀리는지 비교해 보세요.",
         )
 
     if contrast_match:
@@ -474,21 +612,22 @@ def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
     annotated_sentences = sentences[:ANNOTATED_SENTENCE_LIMIT]
     remaining_sentences = sentences[ANNOTATED_SENTENCE_LIMIT:]
     reading_highlights = []
-    reading_focus = ""
     if isinstance(analysis, dict):
         raw_highlights = analysis.get("reading_highlights", [])
         if isinstance(raw_highlights, list):
             reading_highlights = raw_highlights
-        reading_focus = str(analysis.get("reading_focus", "")).strip()
 
     llm_highlight_map = _match_llm_highlights(annotated_sentences, reading_highlights)
-    use_llm_highlights = bool(llm_highlight_map)
 
     assigned_tips: list[tuple[str, str] | None] = []
     for index, sentence in enumerate(annotated_sentences):
         llm_tip = llm_highlight_map.get(index)
         rule_tip = _sentence_tooltip(sentence, sentence_index=index)
         assigned_tips.append(llm_tip or rule_tip)
+
+    assigned_tips = _select_visible_reading_tips(
+        annotated_sentences, assigned_tips, llm_highlight_map
+    )
 
     if annotated_sentences and not any(assigned_tips):
         fallback_index = 0
@@ -502,14 +641,12 @@ def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
         )
 
     sentence_html = []
-    active_labels: list[str] = []
     for sentence, tip in zip(annotated_sentences, assigned_tips):
         if tip is None:
             sentence_html.append(html.escape(sentence))
             continue
 
         tip_label, tooltip = tip
-        active_labels.append(tip_label)
         label_class = _sentence_note_class(tip_label)
         sentence_html.append(
             f"<span class='ns-annotated-sentence {label_class}' "
@@ -519,7 +656,6 @@ def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
         )
 
     body_html = " ".join(sentence_html)
-    focus_note = _build_body_focus_note(active_labels, custom_focus=reading_focus if use_llm_highlights else "")
     rest_html = ""
     if remaining_sentences:
         rest_text = " ".join(remaining_sentences).strip()
@@ -535,15 +671,16 @@ def _render_body_preview_html(body: str, analysis: dict | None = None) -> str:
     return f"""
         <div class="ns-body-panel">
           <div class="ns-body-topline">
-            <div class="ns-panel-kicker">문장별 읽기 보조</div>
-            <div class="ns-panel-note">표시된 문장에 커서를 올리면 이 문장이 기사 안에서 어떤 역할을 하는지 짧은 메모가 나타납니다.</div>
+            <div class="ns-panel-kicker">본문 읽기 보조</div>
+            <div class="ns-panel-note">본문 미리보기에서 강조된 문장을 따라가며, 기사에서 어떤 주장과 근거가 앞세워지는지 읽어볼 수 있습니다. 밑줄 문장에 커서를 올리면 이 문장이 기사 안에서 어떤 역할을 하는지 짧은 메모가 나타납니다.</div>
           </div>
-          <div class="ns-inline-note">본문 미리보기는 추출된 원문을 바탕으로 표시하고, 강조 메모만 AI가 덧붙입니다.</div>
-          <div class="ns-body-focus-note">{html.escape(focus_note)}</div>
           <div class="ns-body-legend">
-            <span class="ns-legend-item"><span class="ns-mark ns-mark-caution">핵심 주장</span> 기사의 주요 결론이나 입장을 드러내는 문장</span>
-            <span class="ns-legend-item"><span class="ns-mark ns-mark-metric">근거 제시</span> 수치, 사례, 인용으로 주장을 뒷받침하는 문장</span>
-            <span class="ns-legend-item"><span class="ns-mark ns-mark-quote">관점 전환</span> 앞뒤 문장과 다른 시각이나 반론을 제시하는 문장</span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-caution">핵심 주장</span></span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-metric">근거 제시</span></span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-quote">관점 전환</span></span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-attribution">직접 발화</span></span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-caution">갈등/책임 표현</span></span>
+            <span class="ns-legend-item"><span class="ns-mark ns-mark-attribution">배경 설명</span></span>
           </div>
           <div class="ns-body-copy">{body_html}</div>
           {rest_html}
@@ -673,8 +810,6 @@ def analyze() -> tuple[dict, int] | tuple[object, int]:
         external_guidance: dict = {}
         external_message = ""
         if not recommendation_result.get("articles"):
-            if recommendation_result.get("notice"):
-                external_message = str(recommendation_result.get("notice", "")).strip()
             external_candidates = search_related_articles(article, analysis, limit=3)
             if external_candidates:
                 external_guidance = explain_external_candidates(article, analysis, external_candidates)

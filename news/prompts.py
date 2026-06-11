@@ -112,7 +112,7 @@ If none of the candidates fit the article well enough, create one short new fram
 - title_body_gap: whether the headline sharpens conflict, simplifies responsibility, narrows the issue, or mostly matches the body.
 - missing_perspective: what is still hard to know after reading this article alone, and what kind of second article would fix that.
 - reading_focus: one short practical note on what the reader should pay special attention to while reading this article critically.
-- reading_highlights: 3-5 genuinely important sentences from the article body. Choose only sentences that deserve a reading note.
+- reading_highlights: 2-3 genuinely important sentences from the article body. Choose only sentences that deserve a critical-reading note.
 - content_bias: from the article's own wording, quotation structure, and emphasis, which side is relatively foregrounded or backgrounded.
 - background_bias: from the article's news selection and contextual framing, which side may benefit from this reporting setup itself.
 - perspective_vector: supplementary emphasis scores showing which axes are relatively strong. These are heuristic reading aids, not absolute verdicts.
@@ -337,10 +337,22 @@ Return ONLY the JSON object and do not wrap it in ```json fences.
 - Write as if the reader will decide in 30 seconds what to compare next.
 - Do not repeat the same idea in summary, framing_analysis, and citation_analysis.
 - Keep each field focused and readable.
-- For reading_highlights, choose only 3-5 sentences that genuinely deserve a note.
+- For reading_highlights, choose only 2-3 sentences that genuinely deserve a note.
 - Copy the original sentence exactly as it appears in the article body. Do not paraphrase.
 - If you cannot copy a sentence exactly from the article body, omit it instead of reconstructing or cleaning it.
 - If a sentence is plain background with no special reading value, do not include it in reading_highlights.
+- Do not choose schedule-only sentences, attendance lists, meeting-location updates, or plain background setup unless the sentence clearly changes how the issue should be read.
+- A sentence deserves a note only if it does at least one of these well:
+  1. sets the article's main problem or conclusion,
+  2. shows whose voice functions as the main factual anchor,
+  3. provides a concrete number, quote, or evidence cue,
+  4. marks a real turn such as 반면, 하지만, 한편,
+  5. sharply frames responsibility, harm, risk, or benefit.
+- Prefer role diversity inside reading_highlights:
+  - one problem-setting or key-claim sentence,
+  - one evidence/quote sentence,
+  - one contrast or omitted-perspective-related sentence if available.
+- If the article only has 2 sentences worth highlighting, return 2. Do not force a third weak sentence.
 - Fill the supplementary diagnostic fields too: bias_axis, bias_strength, emotionality, source_balance, evidence_quality, content_bias, background_bias, perspective_vector.
 - These supplementary diagnostics should remain evidence-based and practical, not ideological slogans.
 
