@@ -3,3 +3,4 @@
 __pycache__/
 .pycache_verify/
 .venv/
+data/articles.db

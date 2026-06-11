@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 EXPLORE_DATA_CANDIDATES = (
     BASE_DIR / "data" / "curated_explore.json",
-    BASE_DIR.parent / "data" / "curated_explore.json",
+    BASE_DIR / "news" / "data" / "curated_explore.json",
 )
 
 
