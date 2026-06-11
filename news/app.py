@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import difflib
 import html
+import json
 import logging
 import os
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -24,6 +26,11 @@ load_dotenv()
 app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)
 logger = logging.getLogger(__name__)
+BASE_DIR = Path(__file__).resolve().parent
+EXPLORE_DATA_CANDIDATES = (
+    BASE_DIR / "data" / "curated_explore.json",
+    BASE_DIR.parent / "data" / "curated_explore.json",
+)
 
 
 DATE_TIME_PATTERN = re.compile(
@@ -586,6 +593,59 @@ def _serialize_analysis(analysis: dict) -> dict:
     return payload
 
 
+def _load_explore_issues() -> tuple[list[dict], str]:
+    """Load pre-curated explore issues from local JSON only."""
+    data_path = next((path for path in EXPLORE_DATA_CANDIDATES if path.exists()), None)
+    if data_path is None:
+        return [], "이슈별 관점 보기 데이터를 불러오지 못했습니다."
+
+    try:
+        with data_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read curated explore data from %s: %s", data_path, exc)
+        return [], "이슈별 관점 보기 데이터를 불러오지 못했습니다."
+
+    if not isinstance(payload, list):
+        logger.warning("Curated explore data should be a list: %s", data_path)
+        return [], "이슈별 관점 보기 데이터를 불러오지 못했습니다."
+
+    issues: list[dict] = []
+    for raw_issue in payload:
+        if not isinstance(raw_issue, dict):
+            continue
+
+        raw_articles = raw_issue.get("articles")
+        articles: list[dict] = []
+        if isinstance(raw_articles, list):
+            for raw_article in raw_articles:
+                if not isinstance(raw_article, dict):
+                    continue
+                articles.append(
+                    {
+                        "perspective_label": str(raw_article.get("perspective_label", "")).strip(),
+                        "frame": str(raw_article.get("frame", "")).strip(),
+                        "title": str(raw_article.get("title", "")).strip(),
+                        "source": str(raw_article.get("source", "")).strip(),
+                        "url": str(raw_article.get("url", "")).strip(),
+                        "summary": str(raw_article.get("summary", "")).strip(),
+                        "reading_point": str(raw_article.get("reading_point", "")).strip(),
+                        "compare_point": str(raw_article.get("compare_point", "")).strip(),
+                    }
+                )
+
+        issues.append(
+            {
+                "issue": str(raw_issue.get("issue", "")).strip(),
+                "description": str(raw_issue.get("description", "")).strip(),
+                "how_to_read": str(raw_issue.get("how_to_read", "")).strip(),
+                "articles": articles,
+            }
+        )
+
+    return issues, ""
+
+
 @app.route("/")
 def index() -> str:
     """Render the NewSight landing page."""
@@ -656,6 +716,15 @@ def analyze() -> tuple[dict, int] | tuple[object, int]:
 def health() -> tuple[object, int]:
     """Health check endpoint."""
     return jsonify({"status": "ok", "message": "NewSight is running"}), 200
+
+
+@app.get("/api/explore")
+def explore() -> tuple[object, int]:
+    """Return pre-curated issue comparison data from local JSON only."""
+    issues, message = _load_explore_issues()
+    if not issues:
+        return jsonify({"ok": False, "message": message or "이슈별 관점 보기 데이터를 불러오지 못했습니다.", "issues": []}), 200
+    return jsonify({"ok": True, "issues": issues}), 200
 
 
 if __name__ == "__main__":

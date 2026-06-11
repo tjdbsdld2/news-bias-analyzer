@@ -8,12 +8,23 @@ const overviewGrid = document.getElementById("overviewGrid");
 const analysisGrid = document.getElementById("analysisGrid");
 const recommendationSection = document.getElementById("recommendationSection");
 const statusBanner = document.getElementById("statusBanner");
+const viewButtons = Array.from(document.querySelectorAll("[data-view]"));
+const views = Array.from(document.querySelectorAll(".ns-view"));
+const exploreStatus = document.getElementById("exploreStatus");
+const exploreIssueList = document.getElementById("exploreIssueList");
+const exploreIssueDetail = document.getElementById("exploreIssueDetail");
+const exploreArticles = document.getElementById("exploreArticles");
 
 const idleLabel = analyzeBtn.querySelector(".btn-idle");
 const loadingLabel = analyzeBtn.querySelector(".btn-loading");
 
 let sentencePopover = null;
 let activeSentence = null;
+let exploreIssues = [];
+let activeExploreIndex = 0;
+let exploreLoaded = false;
+let exploreLoadingPromise = null;
+let activeViewName = "home";
 
 function setActiveSentence(nextSentence) {
     if (activeSentence && activeSentence !== nextSentence) {
@@ -110,6 +121,76 @@ function setStatus(message, tone = "note") {
 
     statusBanner.className = `ns-status ${tone === "caution" ? "caution" : ""}`;
     statusBanner.innerHTML = `<p>${escapeHtml(message)}</p>`;
+}
+
+function setExploreStatus(message, tone = "note") {
+    if (!exploreStatus) {
+        return;
+    }
+    if (!message) {
+        exploreStatus.className = "ns-status hidden";
+        exploreStatus.innerHTML = "";
+        return;
+    }
+
+    exploreStatus.className = `ns-status ${tone === "caution" ? "caution" : ""}`;
+    exploreStatus.innerHTML = `<p>${escapeHtml(message)}</p>`;
+}
+
+function setActiveViewButton(viewName = "") {
+    viewButtons.forEach((button) => {
+        button.classList.toggle("active", button.dataset.view === viewName);
+    });
+}
+
+function normalizeViewName(rawView = "") {
+    const viewName = String(rawView || "").trim().toLowerCase();
+    const allowedViews = new Set(["home", "analyze", "explore", "criteria", "guide"]);
+    return allowedViews.has(viewName) ? viewName : "home";
+}
+
+function showView(rawViewName, options = {}) {
+    const { updateHash = true, scrollBehavior = "smooth" } = options;
+    const viewName = normalizeViewName(rawViewName);
+    const target = document.getElementById(`view-${viewName}`);
+
+    views.forEach((view) => {
+        const isTarget = view === target;
+        view.classList.toggle("hidden", !isTarget);
+        view.classList.toggle("active-view", isTarget);
+    });
+
+    setActiveViewButton(viewName);
+    hideSentencePopover();
+    activeViewName = viewName;
+
+    if (viewName === "explore") {
+        void ensureExploreLoaded();
+    }
+
+    if (updateHash) {
+        const nextHash = `#${viewName}`;
+        if (window.location.hash !== nextHash) {
+            history.replaceState(null, "", nextHash);
+        }
+    }
+
+    window.scrollTo({ top: 0, behavior: scrollBehavior });
+}
+
+function initViewNavigation() {
+    viewButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            showView(button.dataset.view || "home");
+        });
+    });
+
+    window.addEventListener("hashchange", () => {
+        showView(window.location.hash.replace("#", ""), {
+            updateHash: false,
+            scrollBehavior: "auto",
+        });
+    });
 }
 
 function getUrlValidationMessage(value) {
@@ -485,6 +566,202 @@ function renderRecommendationSection(result, external) {
     `;
 }
 
+function normalizeExploreArticle(article = {}) {
+    return {
+        perspective_label: String(article.perspective_label || "관점 정보 없음").trim() || "관점 정보 없음",
+        frame: String(article.frame || "프레임 정보 없음").trim() || "프레임 정보 없음",
+        title: String(article.title || "제목 정보 없음").trim() || "제목 정보 없음",
+        source: String(article.source || "출처 정보 없음").trim() || "출처 정보 없음",
+        url: String(article.url || "").trim(),
+        summary: String(article.summary || "요약 정보가 아직 준비되지 않았습니다.").trim() || "요약 정보가 아직 준비되지 않았습니다.",
+        reading_point: String(article.reading_point || "이 관점에서 무엇이 중심 쟁점으로 배치되는지 먼저 살펴보세요.").trim() || "이 관점에서 무엇이 중심 쟁점으로 배치되는지 먼저 살펴보세요.",
+        compare_point: String(article.compare_point || "다른 관점 기사와 함께 읽으며 중심 주체와 빠진 맥락이 달라지는지 비교해 보세요.").trim() || "다른 관점 기사와 함께 읽으며 중심 주체와 빠진 맥락이 달라지는지 비교해 보세요.",
+    };
+}
+
+function normalizeExploreIssue(issue = {}) {
+    const articles = Array.isArray(issue.articles) ? issue.articles.map(normalizeExploreArticle) : [];
+    return {
+        issue: String(issue.issue || "이슈 정보 없음").trim() || "이슈 정보 없음",
+        description: String(issue.description || "이 이슈에 대한 설명이 아직 준비되지 않았습니다.").trim() || "이 이슈에 대한 설명이 아직 준비되지 않았습니다.",
+        how_to_read: String(issue.how_to_read || "같은 사건에서도 무엇을 먼저 보여주는지와 누구의 말이 중심 근거로 쓰이는지 비교해 보세요.").trim() || "같은 사건에서도 무엇을 먼저 보여주는지와 누구의 말이 중심 근거로 쓰이는지 비교해 보세요.",
+        articles,
+    };
+}
+
+function renderExploreIssueButtons() {
+    if (!exploreIssueList) {
+        return;
+    }
+
+    if (!exploreIssues.length) {
+        exploreIssueList.innerHTML = `
+            <div class="ns-empty-shell">
+                <p>지금은 보여줄 이슈 묶음이 없습니다.</p>
+            </div>
+        `;
+        return;
+    }
+
+    exploreIssueList.innerHTML = exploreIssues
+        .map(
+            (issue, index) => `
+                <button
+                    type="button"
+                    class="ns-issue-button ${index === activeExploreIndex ? "is-active" : ""}"
+                    data-issue-index="${index}"
+                    aria-pressed="${index === activeExploreIndex ? "true" : "false"}"
+                >
+                    <span class="ns-issue-button-label">${escapeHtml(issue.issue)}</span>
+                    <span class="ns-issue-button-meta">${escapeHtml(`${issue.articles.length}개 관점 기사`)}</span>
+                </button>
+            `
+        )
+        .join("");
+
+    exploreIssueList.querySelectorAll("[data-issue-index]").forEach((button) => {
+        button.addEventListener("click", () => {
+            const nextIndex = Number(button.getAttribute("data-issue-index"));
+            if (Number.isNaN(nextIndex)) {
+                return;
+            }
+            activeExploreIndex = nextIndex;
+            renderExplorePanel();
+        });
+    });
+}
+
+function renderExploreIssueDetail(issue) {
+    if (!exploreIssueDetail) {
+        return;
+    }
+
+    if (!issue) {
+        exploreIssueDetail.innerHTML = `
+            <div class="ns-empty-shell">
+                <p>이슈를 선택하면 설명과 비교 포인트가 표시됩니다.</p>
+            </div>
+        `;
+        return;
+    }
+
+    exploreIssueDetail.innerHTML = `
+        <div class="ns-explore-issue-head">
+            <div class="ns-panel-kicker">선택된 이슈</div>
+            <h3 class="ns-explore-issue-title">${escapeHtml(issue.issue)}</h3>
+            <p class="ns-explore-issue-description">${escapeHtml(issue.description)}</p>
+        </div>
+        <div class="ns-how-to-read-box">
+            <div class="ns-mini-label">이 이슈를 비교해서 읽는 법</div>
+            <p>${escapeHtml(issue.how_to_read)}</p>
+        </div>
+    `;
+}
+
+function renderExploreArticleCards(issue) {
+    if (!exploreArticles) {
+        return;
+    }
+
+    const articles = issue?.articles || [];
+    if (!articles.length) {
+        exploreArticles.innerHTML = `
+            <div class="ns-empty-shell">
+                <p>이 이슈에 연결된 관점별 기사 카드가 아직 없습니다.</p>
+            </div>
+        `;
+        return;
+    }
+
+    exploreArticles.innerHTML = articles
+        .map(
+            (article) => `
+                <article class="ns-perspective-card">
+                    <div class="ns-rec-topline">
+                        <span class="ns-perspective-label">${escapeHtml(article.perspective_label)}</span>
+                        <span class="ns-frame-pill">${escapeHtml(article.frame)}</span>
+                    </div>
+                    <h3 class="ns-rec-title">${escapeHtml(article.title)}</h3>
+                    <div class="ns-rec-meta">${escapeHtml(article.source)}</div>
+                    <p class="ns-card-copy">${escapeHtml(article.summary)}</p>
+                    <div class="ns-perspective-block">
+                        <strong>읽기 포인트</strong>
+                        <p>${escapeHtml(article.reading_point)}</p>
+                    </div>
+                    <div class="ns-perspective-block">
+                        <strong>비교 포인트</strong>
+                        <p>${escapeHtml(article.compare_point)}</p>
+                    </div>
+                    <a class="ns-link-btn" href="${escapeHtml(article.url || "#")}" target="_blank" rel="noopener noreferrer">기사 원문 보기</a>
+                </article>
+            `
+        )
+        .join("");
+}
+
+function renderExplorePanel() {
+    if (!exploreIssues.length) {
+        renderExploreIssueDetail(null);
+        renderExploreArticleCards(null);
+        return;
+    }
+
+    if (activeExploreIndex < 0 || activeExploreIndex >= exploreIssues.length) {
+        activeExploreIndex = 0;
+    }
+
+    const activeIssue = exploreIssues[activeExploreIndex];
+    renderExploreIssueButtons();
+    renderExploreIssueDetail(activeIssue);
+    renderExploreArticleCards(activeIssue);
+}
+
+async function ensureExploreLoaded() {
+    if (exploreLoaded) {
+        return exploreIssues;
+    }
+    if (exploreLoadingPromise) {
+        return exploreLoadingPromise;
+    }
+
+    setExploreStatus("이슈별 관점 보기 데이터를 불러오는 중입니다.");
+    exploreLoadingPromise = (async () => {
+        try {
+            const response = await fetch("/api/explore");
+            const payload = await parseApiResponse(response);
+            const rawIssues = Array.isArray(payload.issues) ? payload.issues : [];
+
+            exploreIssues = rawIssues.map(normalizeExploreIssue);
+            exploreLoaded = response.ok && Boolean(payload.ok) && exploreIssues.length > 0;
+
+            if (!response.ok || !payload.ok || !exploreIssues.length) {
+                renderExplorePanel();
+                setExploreStatus(payload.message || "이슈별 관점 보기 데이터를 불러오지 못했습니다.", "caution");
+                return exploreIssues;
+            }
+
+            activeExploreIndex = 0;
+            renderExplorePanel();
+            setExploreStatus("검수된 기사 묶음을 불러왔습니다. 이슈를 선택해 관점 차이를 비교해 보세요.");
+            return exploreIssues;
+        } catch (error) {
+            exploreIssues = [];
+            renderExplorePanel();
+            const rawMessage = error?.message || "";
+            const friendlyMessage =
+                /Failed to fetch|NetworkError|Load failed/i.test(rawMessage)
+                    ? "이슈별 관점 보기 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."
+                    : rawMessage || "이슈별 관점 보기 데이터를 불러오지 못했습니다.";
+            setExploreStatus(friendlyMessage, "caution");
+            return exploreIssues;
+        } finally {
+            exploreLoadingPromise = null;
+        }
+    })();
+
+    return exploreLoadingPromise;
+}
+
 async function analyzeArticle(url) {
     setLoading(true);
     setStatus("");
@@ -537,4 +814,11 @@ analyzeForm.addEventListener("submit", async (event) => {
         return;
     }
     await analyzeArticle(url);
+});
+
+renderExplorePanel();
+initViewNavigation();
+showView(window.location.hash.replace("#", "") || activeViewName, {
+    updateHash: false,
+    scrollBehavior: "auto",
 });

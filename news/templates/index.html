@@ -13,92 +13,208 @@
     <div class="ns-shell">
         <header class="ns-topbar">
             <div class="ns-topbar-inner">
-                <div class="ns-brand">
+                <button type="button" class="ns-brand ns-nav-button active" data-view="home" aria-label="NewSight 홈으로 이동">
                     <div class="ns-brand-mark">NEWSIGHT</div>
                     <div class="ns-brand-sub">AI 미디어 리터러시 콘솔</div>
-                </div>
+                </button>
                 <nav class="ns-nav">
-                    <a href="#results">분석 결과</a>
-                    <a href="#how-to-read">읽는 법</a>
+                    <button type="button" class="ns-nav-button" data-view="analyze">분석하기</button>
+                    <button type="button" class="ns-nav-button" data-view="explore">이슈별 관점 보기</button>
+                    <button type="button" class="ns-nav-button" data-view="criteria">분석 기준</button>
+                    <button type="button" class="ns-nav-button" data-view="guide">이용 가이드</button>
                 </nav>
             </div>
         </header>
 
         <main class="ns-main">
-            <section class="ns-hero">
-                <div class="ns-hero-copy">
-                    <div class="ns-eyebrow">NewSight Editorial Console</div>
-                    <h1>뉴스를 더 넓게 읽다</h1>
-                    <p class="ns-hero-lead">
-                        기사 URL을 입력하면 AI가 핵심 프레임과 강조점을 분석하고, 같은 이슈의 다른 관점 기사까지 함께 보여줍니다.
-                    </p>
-                    <div class="ns-hero-rail">
-                        <div class="ns-hero-rail-item">
-                            <div class="ns-hero-rail-label">Extract</div>
-                            <p>기사의 제목과 본문을 정리합니다.</p>
-                        </div>
-                        <div class="ns-hero-rail-item">
-                            <div class="ns-hero-rail-label">Analyze</div>
-                            <p>표현, 인용, 강조점을 바탕으로 기사 프레임을 분석합니다.</p>
-                        </div>
-                        <div class="ns-hero-rail-item">
-                            <div class="ns-hero-rail-label">Compare</div>
-                            <p>같은 이슈를 다른 관점에서 다룬 기사를 함께 보여줍니다.</p>
+            <section id="view-home" class="ns-view active-view">
+                <section class="ns-hero">
+                    <div class="ns-hero-copy">
+                        <div class="ns-eyebrow">NewSight Editorial Console</div>
+                        <h1>뉴스를 더 넓게 읽다</h1>
+                        <p class="ns-hero-lead">
+                            기사 URL을 입력하면 AI가 핵심 프레임과 강조점을 분석하고, 같은 이슈의 다른 관점 기사까지 함께 보여줍니다.
+                        </p>
+                        <div class="ns-hero-rail">
+                            <div class="ns-hero-rail-item">
+                                <div class="ns-hero-rail-label">프레임 분석</div>
+                                <p>기사가 사건을 어떤 문제로 설정하는지 확인합니다.</p>
+                            </div>
+                            <div class="ns-hero-rail-item">
+                                <div class="ns-hero-rail-label">인용 구조 확인</div>
+                                <p>누구의 말이 중심 근거로 쓰이는지 살펴봅니다.</p>
+                            </div>
+                            <div class="ns-hero-rail-item">
+                                <div class="ns-hero-rail-label">다른 관점 추천</div>
+                                <p>같은 이슈를 다르게 다룬 기사를 함께 비교합니다.</p>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <aside id="how-to-read" class="ns-hero-note">
-                    <div class="ns-note-title">이 화면에서 확인할 수 있는 것</div>
-                    <ul>
-                        <li>기사에서 어떤 주체와 쟁점이 중심에 놓였는지 확인합니다.</li>
-                        <li>문장별 보조 메모를 통해 문장의 역할과 강조점을 빠르게 짚어봅니다.</li>
-                        <li>검수 DB와 확장 DB를 바탕으로 비교 기사를 추천합니다.</li>
-                    </ul>
-                </aside>
-            </section>
-
-            <section class="ns-search-card">
-                <form id="analyzeForm" class="ns-search-form">
-                    <label class="ns-search-label" for="newsUrl">입력 기사</label>
-                    <div class="ns-search-row">
-                        <input
-                            id="newsUrl"
-                            name="newsUrl"
-                            type="url"
-                            class="ns-url-input"
-                            placeholder="https://news.example.com/article/123"
-                            autocomplete="off"
-                            required
-                        >
-                        <button id="analyzeBtn" type="submit" class="ns-primary-btn">
-                            <span class="btn-idle">분석 시작</span>
-                            <span class="btn-loading hidden-inline">분석 중...</span>
-                        </button>
-                    </div>
-                    <p class="ns-search-help">네이버 뉴스, 언론사 직접 링크, 공유 URL 등 기사 본문이 있는 주소를 붙여넣어 주세요.</p>
-                </form>
-            </section>
-
-            <div id="statusBanner" class="ns-status hidden" aria-live="polite"></div>
-
-            <section id="loading" class="ns-loading hidden" aria-live="polite">
-                <div class="ns-spinner"></div>
-                <p>기사 본문을 추출하고, 비교 읽기에 필요한 단서를 정리하고 있습니다...</p>
-            </section>
-
-            <section id="results" class="ns-results hidden">
-                <section id="articlePanel" class="ns-card ns-article-panel"></section>
-
-                <section class="ns-analysis-section">
-                    <div class="ns-section-header">
-                        <div class="ns-section-kicker">AI 미디어 리터러시 분석</div>
-                        <h2>읽기 포인트</h2>
-                    </div>
-                    <div id="overviewGrid" class="ns-overview-grid"></div>
-                    <div id="analysisGrid" class="ns-analysis-grid"></div>
+                    <aside class="ns-hero-note">
+                        <div class="ns-note-title">이 화면에서 확인할 수 있는 것</div>
+                        <ul>
+                            <li>기사에서 어떤 주체와 쟁점이 중심에 놓였는지 확인합니다.</li>
+                            <li>문장별 보조 메모를 통해 문장의 역할과 강조점을 빠르게 짚어봅니다.</li>
+                            <li>검수 DB와 확장 DB를 바탕으로 비교 기사를 추천합니다.</li>
+                        </ul>
+                    </aside>
                 </section>
+            </section>
 
-                <section id="recommendationSection" class="ns-recommendation-section"></section>
+            <section id="view-analyze" class="ns-view hidden">
+                <section class="ns-page-panel ns-analyze-section">
+                    <div class="ns-section-header">
+                        <div class="ns-section-kicker">분석하기</div>
+                        <h2>기사 URL로 관점 분석하기</h2>
+                        <p class="ns-section-lead">
+                            뉴스 기사 URL을 입력하면 AI가 기사 속 프레임, 주요 목소리, 빠진 관점, 제목과 본문의 강조 차이를 분석합니다.
+                        </p>
+                    </div>
+
+                    <section class="ns-search-card">
+                        <form id="analyzeForm" class="ns-search-form">
+                            <label class="ns-search-label" for="newsUrl">입력 기사</label>
+                            <div class="ns-search-row">
+                                <input
+                                    id="newsUrl"
+                                    name="newsUrl"
+                                    type="url"
+                                    class="ns-url-input"
+                                    placeholder="https://news.example.com/article/123"
+                                    autocomplete="off"
+                                    required
+                                >
+                                <button id="analyzeBtn" type="submit" class="ns-primary-btn">
+                                    <span class="btn-idle">분석 시작</span>
+                                    <span class="btn-loading hidden-inline">분석 중...</span>
+                                </button>
+                            </div>
+                            <p class="ns-search-help">네이버 뉴스, 언론사 직접 링크, 공유 URL 등 기사 본문이 있는 주소를 붙여넣어 주세요.</p>
+                        </form>
+                    </section>
+
+                    <div id="statusBanner" class="ns-status hidden" aria-live="polite"></div>
+
+                    <section id="loading" class="ns-loading hidden" aria-live="polite">
+                        <div class="ns-spinner"></div>
+                        <p>기사 본문을 추출하고, 비교 읽기에 필요한 단서를 정리하고 있습니다...</p>
+                    </section>
+
+                    <section id="results" class="ns-results hidden">
+                        <section id="articlePanel" class="ns-card ns-article-panel"></section>
+
+                        <section class="ns-analysis-section">
+                            <div class="ns-section-header">
+                                <div class="ns-section-kicker">AI 미디어 리터러시 분석</div>
+                                <h2>읽기 포인트</h2>
+                            </div>
+                            <div id="overviewGrid" class="ns-overview-grid"></div>
+                            <div id="analysisGrid" class="ns-analysis-grid"></div>
+                        </section>
+
+                        <section id="recommendationSection" class="ns-recommendation-section"></section>
+                    </section>
+                </section>
+            </section>
+
+            <section id="view-explore" class="ns-view hidden">
+                <section class="ns-page-panel ns-explore-section">
+                    <div class="ns-section-header">
+                        <div class="ns-section-kicker">이슈별 관점 보기</div>
+                        <h2>이슈별 관점 보기</h2>
+                        <p class="ns-section-lead">
+                            검수된 기사 묶음을 통해 같은 이슈가 어떤 관점으로 다르게 보도되는지 비교해보세요.
+                        </p>
+                    </div>
+                    <section class="ns-explore-intro">
+                        <div class="ns-explore-intro-copy">
+                            <div class="ns-panel-kicker">같은 이슈, 다른 시선</div>
+                            <h3 class="ns-explore-intro-title">같은 이슈, 다른 시선</h3>
+                            <p class="ns-explore-intro-body">
+                                NewSight와 함께 같은 이슈를 서로 다른 관점의 기사로 비교해보세요.
+                                무엇이 강조되고, 누구의 목소리가 중심에 놓이며, 어떤 관점이 덜 다뤄졌는지 살펴보며 뉴스를 보는 힘을 기를 수 있습니다.
+                            </p>
+                        </div>
+                        <div class="ns-explore-feature-grid">
+                            <article class="ns-explore-feature-card">
+                                <div class="ns-card-title">관점별 기사 묶음</div>
+                                <p class="ns-card-copy">같은 이슈를 서로 다른 프레임으로 다룬 기사들을 모아 보여줍니다.</p>
+                            </article>
+                            <article class="ns-explore-feature-card">
+                                <div class="ns-card-title">비교해서 읽기</div>
+                                <p class="ns-card-copy">각 기사가 무엇을 강조하고 어떤 목소리를 중심에 두는지 비교합니다.</p>
+                            </article>
+                            <article class="ns-explore-feature-card">
+                                <div class="ns-card-title">스스로 판단하기</div>
+                                <p class="ns-card-copy">하나의 결론을 제시하기보다, 여러 관점을 함께 읽고 판단할 수 있도록 돕습니다.</p>
+                            </article>
+                        </div>
+                    </section>
+                    <div id="exploreStatus" class="ns-status hidden" aria-live="polite"></div>
+                    <div class="ns-explore-layout">
+                        <div id="exploreIssueList" class="ns-issue-grid" aria-label="이슈 선택 목록"></div>
+                        <div class="ns-explore-detail">
+                            <div id="exploreIssueDetail" class="ns-explore-issue-shell"></div>
+                            <div id="exploreArticles" class="ns-explore-article-grid"></div>
+                        </div>
+                    </div>
+                </section>
+            </section>
+
+            <section id="view-criteria" class="ns-view hidden">
+                <section class="ns-page-panel ns-static-section">
+                    <div class="ns-section-header">
+                        <div class="ns-section-kicker">분석 기준</div>
+                        <h2>같은 사실도 다르게 읽힐 수 있습니다</h2>
+                        <p class="ns-section-lead">
+                            뉴스는 사실을 전달하지만, 어떤 쟁점을 먼저 보여주고 누구의 말을 인용하며 어떤 관점을 생략하는지에 따라 독자가 사건을 이해하는 방식은 달라질 수 있습니다.
+                        </p>
+                    </div>
+                    <div class="ns-static-grid">
+                        <article class="ns-static-card">
+                            <div class="ns-card-title">무엇을 먼저 보여주는가</div>
+                            <p class="ns-card-copy">제목과 첫 문장은 독자가 사건을 처음 받아들이는 방향을 만듭니다.</p>
+                        </article>
+                        <article class="ns-static-card">
+                            <div class="ns-card-title">누구의 말을 중심에 두는가</div>
+                            <p class="ns-card-copy">공식 정보원, 전문가, 당사자, 시민 중 누구의 목소리가 중심에 놓이는지에 따라 기사 흐름이 달라집니다.</p>
+                        </article>
+                        <article class="ns-static-card">
+                            <div class="ns-card-title">무엇이 빠져 있는가</div>
+                            <p class="ns-card-copy">한 기사만으로는 덜 보이는 이해관계자나 반대 관점이 있을 수 있습니다.</p>
+                        </article>
+                        <article class="ns-static-card">
+                            <div class="ns-card-title">같은 이슈를 어떻게 다르게 다루는가</div>
+                            <p class="ns-card-copy">같은 사건이라도 소비자 편익, 기업 부담, 노동자 권리, 정책 정당성 등 서로 다른 프레임으로 설명될 수 있습니다.</p>
+                        </article>
+                    </div>
+                </section>
+            </section>
+
+            <section id="view-guide" class="ns-view hidden">
+                <section class="ns-page-panel ns-static-section">
+                    <div class="ns-section-header">
+                        <div class="ns-section-kicker">이용 가이드</div>
+                        <h2>편향을 단정하기보다, 관점을 비교합니다</h2>
+                        <p class="ns-section-lead">
+                            NewSight는 특정 기사가 편향되었다고 단정하는 도구가 아닙니다. 기사에서 어떤 쟁점이 강조되고, 누구의 말이 중심 근거로 쓰이며, 어떤 관점이 상대적으로 덜 다뤄졌는지 확인하도록 돕는 미디어 리터러시 도구입니다.
+                        </p>
+                    </div>
+                    <div class="ns-guide-grid">
+                        <article class="ns-static-card">
+                            <div class="ns-card-title">분석 결과는 판단의 출발점입니다</div>
+                            <p class="ns-card-copy">AI 분석 결과를 최종 판정으로 보기보다, 기사를 더 비판적으로 읽기 위한 단서로 활용하세요.</p>
+                        </article>
+                        <article class="ns-static-card">
+                            <div class="ns-card-title">한 기사만으로 결론 내리지 않습니다</div>
+                            <p class="ns-card-copy">같은 이슈를 다룬 다른 관점의 기사와 함께 읽을 때 관점 차이가 더 잘 보입니다.</p>
+                        </article>
+                        <article class="ns-static-card">
+                            <div class="ns-card-title">공식 정보원과 현장 목소리를 함께 봅니다</div>
+                            <p class="ns-card-copy">정부, 기업, 전문가의 말뿐 아니라 시민, 노동자, 소상공인, 피해자 등 현장 당사자의 목소리가 포함되어 있는지도 확인해보세요.</p>
+                        </article>
+                    </div>
+                </section>
             </section>
         </main>
 
